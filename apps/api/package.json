@@ -1,0 +1,31 @@
+{
+  "name": "api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/entry.node.ts",
+    "start": "tsx src/entry.node.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.0.8",
+    "@hono/zod-validator": "0.8.0",
+    "@telocc/core": "workspace:*",
+    "@telocc/db": "workspace:*",
+    "@telocc/i18n": "workspace:*",
+    "@telocc/telephony": "workspace:*",
+    "better-auth": "1.6.23",
+    "hono": "4.12.29",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "dotenv": "17.4.2",
+    "tsx": "4.23.0",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10",
+    "wrangler": "4.110.0"
+  }
+}

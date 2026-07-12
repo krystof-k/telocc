@@ -1,0 +1,25 @@
+{
+  "name": "telocc",
+  "main": "src/entry.workers.ts",
+  "compatibility_date": "2026-06-01",
+  "assets": {
+    "directory": "../web/dist",
+    "not_found_handling": "single-page-application"
+  },
+  "triggers": {
+    "crons": ["17 2 * * *"]
+  },
+  "vars": {
+    "APP_ENV": "production",
+    "TELEPHONY_PROVIDER": "mock",
+    "TWILIO_REGION": "ie1",
+    "RETENTION_CALL_LOG_MONTHS": "13",
+    "RETENTION_SECURITY_LOG_DAYS": "90",
+    "COMPLIANCE_POSTURE": "app_layer"
+  }
+  // secrets via `wrangler secret put`: DATABASE_URL, BETTER_AUTH_SECRET, PIN_PEPPER,
+  //   RESEND_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, MOCK_WEBHOOK_SECRET.
+  // No `compatibility_flags` needed: the Workers bundle contains no node-only modules
+  //   (per-entry DB driver split, design.md §1) — pinned by the M0
+  //   `wrangler deploy --dry-run` check (docs/decisions.md #28).
+}

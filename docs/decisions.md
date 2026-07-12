@@ -80,3 +80,10 @@ One-liners for every choice the brief left open. Newest at the bottom.
     deploy smoke step.
 34. **Production boot guards in env.ts:** refuse non-EU Neon hosts (ER-RES-1) and refuse the
     dev `MOCK_WEBHOOK_SECRET` (or unset) while `TELEPHONY_PROVIDER=mock` in production.
+35. **Local Postgres image bumped to `postgres:17-alpine`** (design.md §1's repo-layout
+    comment says "Postgres 16"; the build environment ships 17-alpine pre-pulled). No
+    schema/behaviour impact; `docker-compose.yml` pins 17-alpine.
+36. **shadcn/ui support libraries added** (`clsx`, `tailwind-merge`, `class-variance-authority`,
+    `@radix-ui/react-slot`, `lucide-react`): required transitively by the shadcn/ui component
+    pattern decisions.md #3 already committed to; not separately named in the pre-warmed
+    package list but the same design choice, not a new one.

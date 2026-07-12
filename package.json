@@ -1,0 +1,39 @@
+{
+  "name": "telocc",
+  "private": true,
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev",
+    "demo": "node scripts/demo.mjs",
+    "build": "pnpm --filter web build",
+    "test": "vitest run",
+    "test:contract": "vitest run tests/contract",
+    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm -r --workspace-concurrency=1 run typecheck",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "report:esd": "tsx scripts/esd-report.ts"
+  },
+  "dependencies": {
+    "@telocc/core": "workspace:*",
+    "@telocc/db": "workspace:*",
+    "dotenv": "17.4.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.3",
+    "@types/node": "26.1.1",
+    "tsx": "4.23.0",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp",
+      "workerd"
+    ]
+  }
+}

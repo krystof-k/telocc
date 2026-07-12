@@ -2,12 +2,12 @@ node_modules/
 dist/
 build/
 .wrangler/
-*.local
+.turbo/
+*.log
 .env
 .env.*
 !.env.example
-coverage/
-playwright-report/
-test-results/
-*.tsbuildinfo
 .DS_Store
+coverage/
+.vitepress/cache
+apps/web/dist/
