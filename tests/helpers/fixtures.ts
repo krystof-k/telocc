@@ -264,7 +264,11 @@ export async function createReadyOrg(
     dialinHourlyCap: opts.dialinHourlyCap,
     outboundDailyMinutesCap: opts.outboundDailyMinutesCap,
   });
-  const personalNumberE164 = opts.personalNumberE164 ?? '+420777123456';
+  // Unique per call, like businessNumberE164 above: the verified personal number is the
+  // dial-in identity (exact CLI match), so two ready orgs sharing one default number
+  // would make org B's calls look like org A's own dial-in.
+  const personalNumberE164 =
+    opts.personalNumberE164 ?? `+42077${String(Math.floor(Math.random() * 1e7)).padStart(7, '0')}`;
   await createMembershipFixture(db, {
     orgId: org.id,
     userId,

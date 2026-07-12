@@ -101,6 +101,9 @@ describe('appless dial-in outbound', () => {
     const bareRes = await ctx.telco.dtmf({ callRef: callRef1, digits: '604111333' });
     expect(bareRes.instruction?.kind).toBe('bridge');
     const bareTarget = bareRes.instruction?.kind === 'bridge' ? bareRes.instruction.target : null;
+    // Finish the first bridge before starting the second: one active bridge per org is a
+    // structural invariant (decisions.md #29) pinned by this file's concurrency cases.
+    await ctx.telco.completed({ callRef: callRef1, durationSeconds: 5 });
 
     const callRef2 = `call_norm_00420_${randomUUID()}`;
     await ctx.telco.incomingCall({ callRef: callRef2, to, from });

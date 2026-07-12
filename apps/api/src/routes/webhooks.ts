@@ -14,10 +14,12 @@
  * `core/routing/inbound.ts` and `core/call-log.ts` (decisions.md #44 — this replaces
  * M4's inline flow with delegation to those now-implemented modules).
  *
- * SCOPE NOTE: `core/routing/dialin.ts` (M6) is still a stub — this file never creates a
- * `dialin`-kind `call_sessions` row (that entry condition — signalling CLI exactly
- * matching the org's verified personal number — is M6's dial-policy/dialin machine), so
- * `call.dtmf` is always acked-and-ignored here.
+ * SCOPE NOTE (M6): a `call.incoming` whose signalling `from` exactly matches the org's
+ * verified personal number enters the dial-in machine (`core/routing/dialin.ts` +
+ * `core/dial-policy.ts`, design.md §5.2) instead of the inbound machine — the pre-checks
+ * (hourly attempt cap, daily-minutes remainder, structural concurrent-bridge INSERT,
+ * decisions.md #29) are I/O, so they live here; the actual decisions are pure functions
+ * this file calls into and persists.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -25,6 +27,7 @@ import {
   deriveLegRecordUpdate,
   writeTerminalCall,
 } from '@telocc/core/call-log';
+import type { DialPolicyDenyPrefix } from '@telocc/core/dial-policy';
 import { writeAuditEvent } from '@telocc/core/repos/audit';
 import {
   findBusinessNumberByBundleRef,
@@ -32,10 +35,17 @@ import {
   findBusinessNumberByProviderNumberRef,
   updateBusinessNumberStatus,
 } from '@telocc/core/repos/numbers';
+import {
+  decideDialinDigits,
+  decideDialinEntry,
+  dialinBlockedCallLog,
+} from '@telocc/core/routing/dialin';
 import { decideInboundIncoming } from '@telocc/core/routing/inbound';
 import {
   businessNumbers,
   callSessions,
+  calls,
+  dialPolicyPrefixes,
   memberships,
   officeHourRules,
   orgs,
@@ -48,7 +58,7 @@ import {
   type RenderContext,
   type TelephonyEvent,
 } from '@telocc/telephony';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, gte, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Deps } from '../deps.ts';
@@ -162,6 +172,84 @@ function renderInstructionResponse(
 }
 
 // ---------------------------------------------------------------------------
+// Dial-in (appless outbound) I/O helpers (design.md §5.2) — pre-checks the pure
+// `core/routing/dialin.ts` decisions need but deliberately have no access to.
+// ---------------------------------------------------------------------------
+
+const DIALIN_ATTEMPT_SCOPE = 'dialin_attempt';
+const DIALIN_ATTEMPT_WINDOW_SECONDS = 3600; // fixed hourly window (design.md §5.2 step 1)
+
+/** Fixed-window per-org counter, same shape as `recordInvalidSignature`'s global one —
+ * returns the count *including* this attempt. */
+async function incrementDialinHourlyAttempts(deps: Deps, orgId: string): Promise<number> {
+  const nowSec = Math.floor(deps.now().getTime() / 1000);
+  const windowStartSec =
+    Math.floor(nowSec / DIALIN_ATTEMPT_WINDOW_SECONDS) * DIALIN_ATTEMPT_WINDOW_SECONDS;
+  const key = createHash('sha256')
+    .update(`${DIALIN_ATTEMPT_SCOPE} ${orgId} ${windowStartSec}`)
+    .digest('hex');
+  const windowStartsAt = new Date(windowStartSec * 1000);
+  const expiresAt = new Date((windowStartSec + DIALIN_ATTEMPT_WINDOW_SECONDS) * 1000);
+
+  const rows = await deps.db
+    .insert(rateLimitCounters)
+    .values({ key, scope: DIALIN_ATTEMPT_SCOPE, count: 1, windowStartsAt, expiresAt })
+    .onConflictDoUpdate({
+      target: rateLimitCounters.key,
+      set: { count: sql`${rateLimitCounters.count} + 1` },
+    })
+    .returning();
+  return rows[0]?.count ?? 1;
+}
+
+/** design.md §5.2 step 2 — remaining daily outbound minutes = the org's cap minus
+ * minutes already consumed by *answered* outbound calls "today" (calendar day in UTC —
+ * not pinned by design.md; an M6 implementation decision, docs/decisions.md). */
+async function remainingDailyOutboundSeconds(
+  deps: Deps,
+  orgId: string,
+  capMinutes: number,
+): Promise<number> {
+  const now = deps.now();
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const rows = await deps.db
+    .select({ durationSeconds: calls.durationSeconds })
+    .from(calls)
+    .where(
+      and(
+        eq(calls.orgId, orgId),
+        eq(calls.direction, 'outbound'),
+        eq(calls.status, 'answered'),
+        gte(calls.startedAt, dayStart),
+      ),
+    );
+  const consumedSeconds = rows.reduce((sum, r) => sum + r.durationSeconds, 0);
+  return capMinutes * 60 - consumedSeconds;
+}
+
+async function listDialPolicyDenyPrefixes(deps: Deps): Promise<DialPolicyDenyPrefix[]> {
+  const rows = await deps.db.select({ prefix: dialPolicyPrefixes.prefix }).from(dialPolicyPrefixes);
+  return rows;
+}
+
+/** Postgres unique-violation ("23505") on the structural concurrent-bridge index
+ * (`call_sessions_one_active_dialin_per_org`, decisions.md #29) — the INSERT conflict
+ * itself *is* the reject-busy path, no read-then-act race (ER-RATE-2). drizzle-orm
+ * wraps the raw `pg` driver error in a `DrizzleQueryError`, so the Postgres error code
+ * lives on `.cause`, not on the thrown error itself. */
+function pgErrorCode(err: unknown): string | undefined {
+  if (typeof err !== 'object' || err === null) return undefined;
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === 'string') return code;
+  const cause = (err as { cause?: unknown }).cause;
+  return pgErrorCode(cause);
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return pgErrorCode(err) === '23505';
+}
+
+// ---------------------------------------------------------------------------
 // Per-event-type handlers — I/O + dispatch to packages/core's pure decisions.
 // ---------------------------------------------------------------------------
 
@@ -194,6 +282,21 @@ async function handleCallIncoming(
   const hasVerifiedPersonalNumber =
     membership?.personalNumberVerifiedAt != null && membership.personalNumberE164 != null;
 
+  // design.md §5.2 entry condition: `from` (provider signalling, never user input)
+  // EXACTLY matches the org's verified personal number → appless dial-in, not gated by
+  // office hours. Any non-match (near-miss, withheld, another org's verified caller) is
+  // the unverified-caller failure path into the inbound machine below (§5.1).
+  if (org && hasVerifiedPersonalNumber && event.from === membership?.personalNumberE164) {
+    return handleDialinIncoming(deps, event, {
+      orgId,
+      businessNumber: { id: businessNumber.id, e164: businessNumber.e164 },
+      personalNumberE164: membership.personalNumberE164 as string,
+      initiatingUserId: membership.userId,
+      dialinHourlyCap: org.dialinHourlyCap,
+      outboundDailyMinutesCap: org.outboundDailyMinutesCap,
+    });
+  }
+
   const decision = decideInboundIncoming({
     now: deps.now(),
     callRef: event.callRef,
@@ -220,6 +323,75 @@ async function handleCallIncoming(
     .onConflictDoNothing({ target: callSessions.providerCallRef });
 
   return renderInstructionResponse(deps, decision.instruction, event.callRef);
+}
+
+/**
+ * design.md §5.2 pre-checks, in order — each one a decision-time terminal
+ * (`calls` row written immediately, no session ever created):
+ * 1. hourly attempt cap, 2. remaining daily outbound minutes, 3. the structural
+ * concurrent-bridge INSERT (decisions.md #29 — the conflict itself is the reject).
+ */
+async function handleDialinIncoming(
+  deps: Deps,
+  event: Extract<TelephonyEvent, { type: 'call.incoming' }>,
+  ctx: {
+    orgId: string;
+    businessNumber: { id: string; e164: string };
+    personalNumberE164: string;
+    initiatingUserId: string | null;
+    dialinHourlyCap: number;
+    outboundDailyMinutesCap: number;
+  },
+): Promise<Response> {
+  const blockedCtx = {
+    orgId: ctx.orgId,
+    businessNumberId: ctx.businessNumber.id,
+    from: ctx.personalNumberE164,
+    at: event.at,
+    callRef: event.callRef,
+    initiatingUserId: ctx.initiatingUserId,
+  };
+
+  const attempts = await incrementDialinHourlyAttempts(deps, ctx.orgId);
+  if (attempts > ctx.dialinHourlyCap) {
+    await writeTerminalCall(deps.db, dialinBlockedCallLog(blockedCtx, 'rate_limited'));
+    return renderInstructionResponse(deps, { kind: 'reject', cause: 'busy' }, event.callRef);
+  }
+
+  const remainingSeconds = await remainingDailyOutboundSeconds(
+    deps,
+    ctx.orgId,
+    ctx.outboundDailyMinutesCap,
+  );
+  if (remainingSeconds <= 0) {
+    await writeTerminalCall(deps.db, dialinBlockedCallLog(blockedCtx, 'daily_cap_reached'));
+    return renderInstructionResponse(deps, { kind: 'reject', cause: 'busy' }, event.callRef);
+  }
+
+  const { instruction, sessionInsert } = decideDialinEntry({
+    orgId: ctx.orgId,
+    businessNumberId: ctx.businessNumber.id,
+    callRef: event.callRef,
+    from: ctx.personalNumberE164,
+  });
+
+  try {
+    // Idempotent on exact redelivery (same convention as the inbound branch above):
+    // a redelivered call.incoming for the same callRef is a no-op, not a fresh
+    // concurrency conflict. A genuine second concurrent dial-in (different callRef,
+    // same org already collecting/bridging/bridged) still throws on the OTHER
+    // (partial, orgId-scoped) unique index, caught below.
+    await deps.db
+      .insert(callSessions)
+      .values(sessionInsert)
+      .onConflictDoNothing({ target: callSessions.providerCallRef });
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    await writeTerminalCall(deps.db, dialinBlockedCallLog(blockedCtx, 'concurrent_bridge'));
+    return renderInstructionResponse(deps, { kind: 'reject', cause: 'busy' }, event.callRef);
+  }
+
+  return renderInstructionResponse(deps, instruction, event.callRef);
 }
 
 async function handleCallLeg(
@@ -257,6 +429,13 @@ async function handleCallLeg(
   return Response.json({ ok: true }, { status: 200 });
 }
 
+/**
+ * design.md §5.2 `COLLECTING` → hangup/refuseTone/`BRIDGING`. A dtmf event on any
+ * other session shape (no session, inbound session, or a dial-in session already past
+ * `collecting`) is acked-and-ignored (§4.3) — this is also how "no retry" (decisions.md
+ * #13) falls out for free: a second dtmf on an already-finalized (deleted) session
+ * finds no session at all.
+ */
 async function handleCallDtmf(
   deps: Deps,
   event: Extract<TelephonyEvent, { type: 'call.dtmf' }>,
@@ -266,17 +445,71 @@ async function handleCallDtmf(
     .from(callSessions)
     .where(eq(callSessions.providerCallRef, event.callRef));
   const session = rows[0] ?? null;
-  // The appless-outbound (dial-in → DTMF → bridge) machine is M6 scope
-  // (core/routing/dialin.ts); this milestone's call.incoming handler never creates a
-  // `dialin`-kind session, so there is nothing to collect against yet.
-  if (session?.kind !== 'dialin') {
+  if (session?.kind !== 'dialin' || session.state !== 'collecting') {
     await writeAuditEvent(deps.db, {
       type: 'webhook_ignored',
-      meta: { reason: 'dtmf_without_dialin_session' },
+      meta: { reason: 'dtmf_without_collecting_dialin_session' },
     });
     return Response.json({ ignored: true }, { status: 200 });
   }
-  return Response.json({ ok: true }, { status: 200 });
+
+  const businessNumberRows = await deps.db
+    .select()
+    .from(businessNumbers)
+    .where(eq(businessNumbers.id, session.businessNumberId));
+  const businessNumber = businessNumberRows[0] ?? null;
+  const membershipRows = await deps.db
+    .select()
+    .from(memberships)
+    .where(eq(memberships.orgId, session.orgId));
+  const membership = membershipRows[0] ?? null;
+  const orgRows = await deps.db.select().from(orgs).where(eq(orgs.id, session.orgId));
+  const org = orgRows[0] ?? null;
+
+  if (!businessNumber || !membership?.personalNumberE164 || !org) {
+    // Defensive: unreachable given the session was created moments earlier from these
+    // same rows.
+    await writeAuditEvent(deps.db, {
+      type: 'webhook_ignored',
+      meta: { reason: 'dtmf_missing_context' },
+    });
+    return Response.json({ ignored: true }, { status: 200 });
+  }
+
+  const denyPrefixes = await listDialPolicyDenyPrefixes(deps);
+  const remainingSeconds = await remainingDailyOutboundSeconds(
+    deps,
+    session.orgId,
+    org.outboundDailyMinutesCap,
+  );
+
+  const decision = decideDialinDigits({
+    digits: event.digits,
+    at: event.at,
+    callRef: event.callRef,
+    orgId: session.orgId,
+    businessNumberId: businessNumber.id,
+    businessNumberE164: businessNumber.e164,
+    personalNumberE164: membership.personalNumberE164,
+    fromE164: session.fromE164 ?? membership.personalNumberE164,
+    denyPrefixes,
+    remainingDailySeconds: remainingSeconds,
+    initiatingUserId: membership.userId,
+  });
+
+  if (decision.outcome === 'bridge') {
+    await deps.db
+      .update(callSessions)
+      .set({ state: 'bridging', targetE164: decision.targetE164, updatedAt: deps.now() })
+      .where(eq(callSessions.id, session.id));
+    return renderInstructionResponse(deps, decision.instruction, event.callRef);
+  }
+
+  // timeout / refused — decision-time terminal (design.md §5.0): write + delete now,
+  // no retry (decisions.md #13).
+  await writeTerminalCall(deps.db, decision.callLogWrite);
+  await deps.db.delete(callSessions).where(eq(callSessions.id, session.id));
+  return renderInstructionResponse(deps, decision.instruction, event.callRef);
 }
 
 async function handleCallCompleted(
@@ -315,10 +548,8 @@ async function handleCallCompleted(
     { durationSeconds: event.durationSeconds, errorCode: event.errorCode },
   );
 
-  // Outbound (dial-in) finalization's initiating user is M6 territory — this
-  // milestone's call.incoming never creates a `dialin`-kind session, so the branch
-  // below is unreachable today but keeps the writer forward-compatible without a
-  // future redesign of this adapter.
+  // Outbound (dial-in) finalization's initiating user is the org's owner membership
+  // (design.md §5.2/§5.3 — dial-in is single-owner MVP; ER-AUD-1 "initiating_user").
   let initiatingUserId: string | null = null;
   if (session.kind === 'dialin') {
     const membershipRows = await deps.db

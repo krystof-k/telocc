@@ -224,3 +224,105 @@ One-liners for every choice the brief left open. Newest at the bottom.
     (`orgId: membership?.orgId ?? null`) to that route's response would close this — flagged
     for the orchestrator/M2 owner rather than fixed here, since `me.ts` is outside this
     milestone's touchable files.
+54. **M6 "remaining daily outbound minutes" reset boundary:** design.md §5.2/decisions.md #12
+    pin the *arithmetic* (cap minus minutes already consumed today) but not what "today" means.
+    Implemented as the current UTC calendar day (`Date.UTC(now.getUTCFullYear(), ...)`), summing
+    `durationSeconds` of the org's `answered` outbound `calls` rows with `startedAt` on/after
+    that boundary — not org-timezone-aware like office hours (design.md §8), since no test
+    exercises a midnight/DST boundary; flagged as a candidate for an explicit design.md pin if a
+    later milestone needs the org-local definition.
+55. **M6 dial-in hourly attempt cap** uses the same fixed-window `rate_limit_counters` mechanism
+    as the existing invalid-webhook-signature counter (decisions.md #48), keyed per-org
+    (`dialin_attempt org:<id> window:<start>`, 3600s windows) rather than a sliding window —
+    consistent with the existing precedent, sufficient for the frozen cap+1 test (which never
+    crosses a window boundary), not pinned by design.md.
+56. **M6 structural concurrent-bridge cap (decisions.md #29) correctly conflicts on
+    `dialin-outbound.contract.test.ts`'s "entering 9 digits without prefix normalises to +420;
+    00420-prefixed input normalises to the same target" case:** that case drives two full
+    dial-in→bridge flows against one shared `readyOrg()` fixture but never sends
+    `ctx.telco.completed(...)` for the first call, so its `call_sessions` row is still in
+    `state='bridging'` (matching `call_sessions_one_active_dialin_per_org`'s partial predicate,
+    which — correctly per decisions.md #29 — includes `bridging`) when the second call's INSERT
+    runs; the second `incomingCall` is (correctly) rejected busy/`concurrent_bridge` before DTMF
+    collection ever starts, so its `dtmf(...)` call finds no session and the test's `bridge`
+    assertion fails. Confirmed by temporarily adding the missing `ctx.telco.completed({ callRef:
+    callRef1, durationSeconds: 1 })` between the two calls locally (reverted, not committed):
+    the case then passes outright. Not a routing bug — weakening the structural cap to
+    accommodate this would silently reopen the concurrent-bridge safety property the
+    "second simultaneous dial-in…" and "(cap+1)-th dial-in…" cases in the same file pin. Flagged
+    for the orchestrator/M1 test-suite owner; `tests/contract/**` is out of this milestone's
+    touchable files.
+57. **M6 discovered the same class of fixture defect as #51, this time in `personalNumberE164`:**
+    `tests/helpers/fixtures.ts`'s `createReadyOrg()` defaults `personalNumberE164` to the fixed
+    literal `'+420777123456'` for every org unless overridden (unlike `businessNumberE164`,
+    which is randomized by default — see #51's fix note there). `personalNumberE164` has no DB
+    uniqueness constraint, so two `readyOrg()` calls with no override silently produce two orgs
+    with the *identical* verified personal number. This breaks
+    `org-scoping.contract.test.ts`'s "org B's verified number dialling org A's business number
+    gets customer treatment, not dial-in" case (M6-owned, `-t 'dial-in'`): since org B's number
+    literally equals org A's own verified number in the fixture data, design.md §5.2's exact
+    E.164 match (ER-CLI-1) correctly treats the call as *org A's own* dial-in entry — passing it
+    to `collectDigits`, not `forward` — which is the only correct behaviour given that shared
+    literal, not a routing bug. The same collision also spuriously satisfies (rather than
+    exercises) the personal-number-leak assertions in "every authenticated GET route…" and
+    "export contains only…" (both `/api/export`, M8 scope). Confirmed by temporarily randomizing
+    the default (matching #51's fix shape) locally (reverted, not committed): the dial-in case
+    passes cleanly against this milestone's routes. Flagged for the orchestrator/M1 test-suite
+    owner; `tests/helpers/fixtures.ts` is out of this milestone's touchable files.
+58. **M8 confirms #57 also accounts for its two `/api/export` org-scoping cases** ("every
+    authenticated GET route…", "export contains only the caller's org's rows"): both assert
+    `!exportText.includes(orgB.personalNumberE164)` against a `readyOrg()`-fixtured org A whose
+    export legitimately contains *its own* verified number — which, per #57, is the identical
+    literal `'+420777123456'` org B also got by default. `buildAccountExport` (`packages/core/
+    src/dsr.ts`) is correctly org-scoped throughout (every read takes `orgId`/`userId` first);
+    confirmed by temporarily overriding `personalNumberE164` per `readyOrg()` call locally
+    (reverted, not committed) — both cases then pass outright. Not re-flagging as a new defect;
+    recorded here only so M8's report doesn't read as a second, independent bug.
+59. **`packages/core/src/retention.ts`'s `runScheduledJobs` takes a locally-declared
+    `ScheduledJobsEnv` (the four `RETENTION_*`/`ANOMALY_*` numeric fields it reads), not
+    `apps/api/src/env.ts`'s `Env`:** `packages/core` must never import from `apps/api` (design.md
+    §1 layering — the reverse dependency direction is the only one that exists). Structural
+    typing means the real `Env` satisfies this interface without a cast; the contract test's own
+    frozen 4-arg cast (`retention-purge.contract.test.ts`'s header comment, tests/helpers/
+    README.md) bypasses assignability checks entirely regardless, so this has no effect on it.
+60. **`apps/api/src/jobs/scheduled.ts` is a thin `runScheduledJob(deps)` wrapper**, not a second
+    copy of the purge logic: all steps 1–7 (design.md §10.1) plus the §9.9 anomaly scan live in
+    `packages/core/src/retention.ts` (imported directly by the contract test); the wrapper only
+    supplies `deps.{db,provider,env,now}` and logs the outcome via `safeLog` (counts only) so
+    `entry.workers.ts`'s `scheduled()`, `entry.node.ts`'s 24h interval, and `scripts/
+    run-jobs.mjs` share one call site instead of three.
+61. **`eraseAccount` (`packages/core/src/dsr.ts`) calls `provider.releaseNumber` directly, in
+    addition to calling `repos/numbers.ts`'s pre-existing `releaseOrgBusinessNumbers`:**
+    `releaseOrgBusinessNumbers` only invokes the seam's `releaseNumber` when a number already has
+    a stored `providerNumberRef` (skipping the provider call, but still writing the required
+    PII-free `org_id: null` lifecycle audit event, for a directly-fixtured number with none) —
+    correct for its own contract (`provisioning.contract.test.ts`'s "number release on account
+    deletion" case only asserts the audit event exists). `dsr.contract.test.ts`'s "deletion calls
+    releaseNumber and deleteCallRecord… for every provider call ref" case additionally asserts
+    `provider.releaseNumber` was actually invoked, against a `createReadyOrg()`-fixtured business
+    number that (like every such fixture) has no `providerNumberRef` set. `eraseAccount` closes
+    this by attempting release for every releasable number first, using the same `number_<id>`
+    fallback convention `repos/numbers.ts` already documents for resolving such rows by id, then
+    still calling `releaseOrgBusinessNumbers` for the audit trail — best-effort, so a real
+    provider's redundant second release attempt (a 404) is swallowed the same way a missing
+    number would be.
+62. **`scripts/esd-report.ts` and `scripts/run-jobs.impl.ts` wrap their bodies in an `async
+    main()` rather than using top-level `await`:** both scripts are executed directly by `tsx`
+    (`node_modules/.bin/tsx scripts/….ts`, per `posture-flip.contract.test.ts` and `scripts/
+    run-jobs.mjs`'s `spawnSync`), and since the repo root has no `"type": "module"`, `tsx`/esbuild
+    transforms them as CommonJS — which esbuild refuses for top-level `await` outright
+    ("Top-level await is currently not supported with the \"cjs\" output format"). This was
+    already latent in the M0 stub of `run-jobs.impl.ts` (`const result = await
+    runScheduledJobs();` at module scope) before this milestone gave it a real `DATABASE_URL`
+    connection to open; `scripts/esd-report.ts`'s M0 stub had no async code at all, so the defect
+    only surfaced once M8 added the real query. Both scripts now also explicitly close their
+    `pg.Pool` (`db.$client.end()`) at the end of `main()` so the process exits instead of hanging
+    on the pool's open socket — the M0 stub's `run-jobs.impl.ts` never opened a real connection,
+    so this need didn't previously exist either.
+63. **`scripts/esd-report.ts` strips a leading `--` from `process.argv` before calling
+    `node:util`'s `parseArgs`:** the documented invocation (`pnpm report:esd -- --year 2026
+    --half 1`, milestones.md M8 done-when) forwards that literal `--` token as npm/pnpm's "extra
+    args" separator; `parseArgs` treats it as the POSIX end-of-options marker and, without
+    `allowPositionals: true`, throws `ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL` on the first flag
+    after it. Filtering out any `--` token keeps both that invocation and a direct `tsx
+    scripts/esd-report.ts --year 2026 --half 1` call working identically.
