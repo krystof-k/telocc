@@ -95,9 +95,17 @@ describe('org scoping', () => {
       if (!toA || !toB) throw new Error('bad fixture');
       // Drive both calls to their terminal state: forwarded calls write the calls row
       // only at call.completed (design §5.0 — completed is the sole finalizer).
-      await ctx.telco.incomingCall({ callRef: 'scope-own-a', to: toA, from: parseE164('+420603000003') });
+      await ctx.telco.incomingCall({
+        callRef: 'scope-own-a',
+        to: toA,
+        from: parseE164('+420603000003'),
+      });
       await ctx.telco.completed({ callRef: 'scope-own-a', durationSeconds: 30 });
-      await ctx.telco.incomingCall({ callRef: 'scope-own-b', to: toB, from: parseE164('+420603000001') });
+      await ctx.telco.incomingCall({
+        callRef: 'scope-own-b',
+        to: toB,
+        from: parseE164('+420603000001'),
+      });
       await ctx.telco.completed({ callRef: 'scope-own-b', durationSeconds: 30 });
 
       const [orgACall] = await ctx.db.select().from(calls).where(eq(calls.orgId, orgA.orgId));
@@ -200,7 +208,11 @@ describe('org scoping', () => {
     const toB = parseE164(orgB.businessNumberE164);
     if (!toB) throw new Error('bad fixture');
 
-    await ctx.telco.incomingCall({ callRef: 'scope-write-b', to: toB, from: parseE164('+420603000002') });
+    await ctx.telco.incomingCall({
+      callRef: 'scope-write-b',
+      to: toB,
+      from: parseE164('+420603000002'),
+    });
     await ctx.telco.completed({ callRef: 'scope-write-b', durationSeconds: 12 });
 
     const orgBCalls = await ctx.db.select().from(calls).where(eq(calls.orgId, orgB.orgId));
