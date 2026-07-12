@@ -6,9 +6,14 @@ import { requireOrg } from './middleware/org.ts';
 import { securityHeaders } from './middleware/security-headers.ts';
 import { requireSession } from './middleware/session.ts';
 import { authRoutes } from './routes/auth.ts';
+import { devRoutes } from './routes/dev/index.ts';
 import { healthRoute } from './routes/health.ts';
+import { kycRoutes } from './routes/kyc.ts';
 import { meRoutes } from './routes/me.ts';
+import { numbersRoutes } from './routes/numbers.ts';
 import { orgsRoutes } from './routes/orgs.ts';
+import { verificationsRoutes } from './routes/verifications.ts';
+import { webhooksRoutes } from './routes/webhooks.ts';
 
 /** Method+path pairs reachable with a session but no org yet (design.md §6). */
 function bypassesOrgGate(method: string, path: string): boolean {
@@ -27,6 +32,12 @@ export function buildApp(deps: Deps) {
   app.use('*', securityHeaders);
   app.route('/health', healthRoute(deps));
 
+  // Provider webhooks authenticate by signature, never by session (design.md §4);
+  // dev-only simulator/mailbox routes are env-gated inside devRoutes (decisions.md #21).
+  // Both live outside the `/api/*` session gate.
+  app.route('/webhooks', webhooksRoutes(deps));
+  app.route('/dev', devRoutes(deps));
+
   // Mounted before the `/api/*` gate below so magic-link/session/sign-out endpoints
   // stay public — Hono's routing terminates at this sub-app's handler (it never calls
   // `next()`), so requests under `/api/auth/*` never reach the gate middleware
@@ -44,6 +55,9 @@ export function buildApp(deps: Deps) {
 
   app.route('/api/me', meRoutes(deps));
   app.route('/api', orgsRoutes(deps));
+  app.route('/api/verifications', verificationsRoutes(deps));
+  app.route('/api/kyc', kycRoutes(deps));
+  app.route('/api', numbersRoutes(deps));
 
   return app;
 }
