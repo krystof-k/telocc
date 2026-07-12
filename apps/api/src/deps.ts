@@ -1,6 +1,6 @@
 import type { Db } from '@telocc/db';
 import type { TelephonyProvider } from '@telocc/telephony';
-import { createMockProvider } from '@telocc/telephony/mock';
+import { createMockProvider, type MockProviderState } from '@telocc/telephony/mock';
 import type { Env } from './env.ts';
 import { createDevEmailSender, createResendEmailSender, type EmailSender } from './lib/email.ts';
 
@@ -15,6 +15,16 @@ export interface Deps {
   email: EmailSender;
   env: Env;
   now: () => Date;
+  /**
+   * Introspectable mock-provider state (sent SMS, rendered instructions, …) — only
+   * populated when `TELEPHONY_PROVIDER=mock` (design.md §12 "SMS outbox panel"). The
+   * `TelephonyProvider` interface itself stays provider-neutral (design.md §4), so this
+   * lives beside it as an optional, mock-only side channel that `routes/dev/index.ts`
+   * (M10, env-gated) reads for the demo's SMS-outbox panel — never consumed by any
+   * application/routing logic. Contract tests construct `Deps` object literals directly
+   * (tests/helpers/app.ts) and never set this field, which is why it must stay optional.
+   */
+  mockProviderState?: MockProviderState;
 }
 
 function notImplemented(method: string): never {
@@ -68,22 +78,31 @@ function buildEmailSender(env: Env): EmailSender {
  * is fully wired here (M4); `twilio` stays unwired (M9 is "complete against the
  * interface" but deliberately not composed into the running app yet — that wiring is
  * a go-live step, docs/design.md §13) and falls back to the placeholder so a
- * misconfigured `TELEPHONY_PROVIDER=twilio` fails loudly rather than silently. */
-function buildProvider(env: Env, now: () => Date): TelephonyProvider {
+ * misconfigured `TELEPHONY_PROVIDER=twilio` fails loudly rather than silently. The
+ * mock's introspectable `state` (sent SMS, …) is returned alongside the provider so
+ * `buildDeps` can surface it as `Deps.mockProviderState` for the dev-only SMS-outbox
+ * panel (design.md §12) — `undefined` for every other provider. */
+function buildProvider(
+  env: Env,
+  now: () => Date,
+): { provider: TelephonyProvider; mockProviderState?: MockProviderState } {
   if (env.TELEPHONY_PROVIDER === 'mock') {
-    return createMockProvider({ webhookSecret: env.MOCK_WEBHOOK_SECRET, now }).provider;
+    const instance = createMockProvider({ webhookSecret: env.MOCK_WEBHOOK_SECRET, now });
+    return { provider: instance.provider, mockProviderState: instance.state };
   }
-  return notImplementedProvider;
+  return { provider: notImplementedProvider };
 }
 
 /** Wires `db` + `env` (always real) with the real telephony provider and `EmailSender`. */
 export function buildDeps(params: { db: Db; env: Env; now?: () => Date }): Deps {
   const now = params.now ?? (() => new Date());
+  const { provider, mockProviderState } = buildProvider(params.env, now);
   return {
     db: params.db,
     env: params.env,
     now,
-    provider: buildProvider(params.env, now),
+    provider,
+    mockProviderState,
     email: buildEmailSender(params.env),
   };
 }

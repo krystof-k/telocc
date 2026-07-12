@@ -83,12 +83,25 @@ export function authRoutes(deps: Deps, auth: BetterAuthInstance) {
       if (token && (await isMagicLinkTokenExpired(deps, token))) {
         return c.json({ error: 'invalid_or_expired_token' }, 400);
       }
-      const res = await auth.handler(c.req.raw);
-      // We never pass callbackURL, so Better Auth's magic-link verify endpoint only
-      // redirects (3xx) on failure (invalid/consumed token, sign-up disabled, …) —
-      // success returns JSON directly. Callers here are API/fetch consumers, not a
-      // browser following a Location header, so failures are surfaced as a generic
-      // 400 JSON error rather than a redirect.
+      // Strip callback-URL query params before delegating to Better Auth: its
+      // magic-link plugin's own `POST /sign-in/magic-link` handler always appends
+      // `callbackURL` (defaulting to `/`) to the link it emails — never omits it — and
+      // when `callbackURL` is present on the verify GET, a *successful* verification
+      // 3xx-redirects to it instead of returning JSON, indistinguishable from here from
+      // the plugin's own redirect-on-failure path (invalid/expired token, sign-up
+      // disabled, …). Dropping the param restores the documented contract this route
+      // relies on below (JSON on success, 3xx only on failure) without touching token/
+      // session validation at all — callers here are API/fetch consumers (the SPA, the
+      // dev mailbox link, curl), not a browser expecting a Location-header redirect.
+      const strippedUrl = new URL(c.req.url);
+      strippedUrl.searchParams.delete('callbackURL');
+      strippedUrl.searchParams.delete('newUserCallbackURL');
+      strippedUrl.searchParams.delete('errorCallbackURL');
+      const strippedReq = new Request(strippedUrl, {
+        method: c.req.raw.method,
+        headers: c.req.raw.headers,
+      });
+      const res = await auth.handler(strippedReq);
       if (res.status >= 300 && res.status < 400) {
         return c.json({ error: 'invalid_or_expired_token' }, 400);
       }

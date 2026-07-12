@@ -10,8 +10,10 @@
  * endpoint"), without needing a circular reference to the fully-assembled top-level
  * app (which does not exist yet at the point `deps`/`devRoutes` are constructed).
  */
+import { businessNumbers, memberships, orgs } from '@telocc/db';
 import { parseE164 } from '@telocc/telephony';
 import { createMockTelco } from '@telocc/telephony/mock';
+import { desc, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Deps } from '../../deps.ts';
@@ -78,6 +80,47 @@ export function devRoutes(deps: Deps) {
   r.get('/mailbox', (c) => {
     const email = deps.email as unknown as { sent?: unknown[] };
     return c.json({ messages: email.sent ?? [] });
+  });
+
+  // SMS outbox panel (design.md §12): mock `sendSms` capture, e.g. the PIN-verification
+  // texts issued during onboarding/settings re-verification. Only populated when
+  // `TELEPHONY_PROVIDER=mock` (deps.ts's `buildDeps`) — empty otherwise, never an error,
+  // since dev routes may run against any provider in principle.
+  r.get('/sim/sms-outbox', (c) => c.json({ messages: deps.mockProviderState?.sentSms ?? [] }));
+
+  // Simulator-page bootstrap info (design.md §12): the most-recently-created org's
+  // business/personal numbers, so the simulator page never has to hard-code the demo
+  // seed's phone numbers — it works for any org state the demo happens to be in.
+  // `dev/**` is exempt from the "routes import repos, not @telocc/db" convention
+  // (design.md §3.2), same as `webhooks.ts`.
+  r.get('/sim/demo-info', async (c) => {
+    const orgRows = await deps.db.select().from(orgs).orderBy(desc(orgs.createdAt)).limit(1);
+    const org = orgRows[0] ?? null;
+    if (!org) return c.json({ org: null }, 200);
+
+    const membershipRows = await deps.db
+      .select()
+      .from(memberships)
+      .where(eq(memberships.orgId, org.id));
+    const membership = membershipRows[0] ?? null;
+
+    const businessNumberRows = await deps.db
+      .select()
+      .from(businessNumbers)
+      .where(eq(businessNumbers.orgId, org.id));
+    const businessNumber = businessNumberRows[0] ?? null;
+
+    return c.json({
+      org: {
+        id: org.id,
+        name: org.name,
+        officeHoursMode: org.officeHoursMode,
+        personalNumberE164: membership?.personalNumberE164 ?? null,
+        personalNumberVerified: membership?.personalNumberVerifiedAt != null,
+        businessNumberE164: businessNumber?.e164 ?? null,
+        businessNumberStatus: businessNumber?.status ?? null,
+      },
+    });
   });
 
   r.get('/sim/state', (c) => c.json({ events: eventLog }));

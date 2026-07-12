@@ -11,3 +11,7 @@ build/
 coverage/
 .vitepress/cache
 apps/web/dist/
+e2e/.auth/
+test-results/
+playwright-report/
+blob-report/

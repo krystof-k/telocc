@@ -204,7 +204,13 @@ export function OfficeHoursSection() {
         {saved && <Alert variant="success">{t('settings.officeHoursSaved')}</Alert>}
         {error && <Alert variant="danger">{error}</Alert>}
 
-        <Button type="button" onClick={handleSave} disabled={busy} className="self-start">
+        <Button
+          type="button"
+          data-testid="office-hours-save-button"
+          onClick={handleSave}
+          disabled={busy}
+          className="self-start"
+        >
           {busy ? t('common.loading') : t('common.save')}
         </Button>
       </div>
