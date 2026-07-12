@@ -15,6 +15,9 @@ export const en = {
     emailLabel: 'Email address',
     sendMagicLink: 'Send me a sign-in link',
     magicLinkSent: 'If that address has an account, a sign-in link is on its way.',
+    magicLinkEmailSubject: 'Your Telocc sign-in link',
+    magicLinkEmailIntro:
+      'Click the link below to sign in to Telocc. This link expires in 15 minutes and can only be used once.',
   },
   onboarding: {
     createOrgTitle: 'Set up your organisation',

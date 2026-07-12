@@ -107,3 +107,22 @@ One-liners for every choice the brief left open. Newest at the bottom.
     in production, `CF-Connecting-IP` is preferred when present (Cloudflare's
     platform-verified origin-IP header, not client-forgeable at the edge), falling back
     to `X-Forwarded-For` when absent.
+41. **Better Auth session cookie: `Secure` forced via `advanced.cookies.session_token.attributes`,
+    not `useSecureCookies: true`** (refines #31). Better Auth 1.6.23's `useSecureCookies` also
+    prepends a `__Secure-` name prefix (browser cookie-prefix convention), which would rename the
+    cookie to `__Secure-telocc.session_token` — breaking the exact `telocc.session_token` name
+    pinned by the contract tests. Forcing the `secure` attribute directly (leaving
+    `useSecureCookies` unset) gets the same outcome #31 describes — `Secure` present
+    unconditionally, identical across environments — without the name change.
+42. **Magic-link token TTL/reissue-invalidation implemented alongside Better Auth, not purely
+    inside it** (design.md §6/§9.4). Better Auth computes `verification.expiresAt` from the real
+    system clock with no injectable `now`, so it can't be made to respect the contract-test fake
+    clock (`deps.now`); and this Better Auth version's magic-link plugin does not invalidate a
+    previously issued, unused token when a new one is issued for the same email. `apps/api/src/
+    lib/auth.ts` closes both gaps itself: `storeToken` uses a custom SHA-256 hasher (so the exact
+    hash is known), `sendMagicLink` stamps the verification row's `value` JSON with our own
+    `issuedAt` (per `deps.now()`), and the `/magic-link/verify` route pre-checks that stamp before
+    ever calling into Better Auth's handler; `/sign-in/magic-link` deletes any prior unconsumed
+    verification row for the same email before issuing a new one. In production `deps.now` is the
+    real clock, so this is simply a second, consistent way of tracking the same thing — no
+    behavioural difference from relying on Better Auth alone.
