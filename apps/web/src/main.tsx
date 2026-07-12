@@ -1,10 +1,16 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { setLocale } from '@telocc/i18n';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import { ApiError } from './lib/api.ts';
 import { AppRoutes } from './routes.tsx';
 import './index.css';
+
+// ER-EMG-3 / decisions.md #1: Czech readers get the (partial) cs dictionary, with a
+// per-key fallback to en — everyone else is unaffected. `navigator.language` is the
+// boring browser-native signal; no server negotiation, no stored user preference.
+setLocale(navigator.language?.toLowerCase().startsWith('cs') ? 'cs' : 'en');
 
 const queryClient = new QueryClient({
   defaultOptions: {

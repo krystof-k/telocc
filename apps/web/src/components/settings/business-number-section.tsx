@@ -42,6 +42,16 @@ export function BusinessNumberSection({
           {businessNumber.deliverabilityWarning && (
             <Alert variant="warning">{t('dashboard.deliverabilityWarning')}</Alert>
           )}
+          {businessNumber.status === 'rejected' && businessNumber.providerRejectionReason && (
+            <Alert variant="danger">
+              <p className="font-medium">{t('settings.businessNumberRejected')}</p>
+              <p className="mt-1">
+                {t('settings.businessNumberRejectionReasonLabel')}:{' '}
+                {businessNumber.providerRejectionReason}
+              </p>
+              <p className="mt-1">{t('settings.businessNumberRejectionRemediation')}</p>
+            </Alert>
+          )}
         </dl>
       ) : (
         <p className="mt-3 text-neutral-500">{t('settings.businessNumberNone')}</p>

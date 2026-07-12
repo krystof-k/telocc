@@ -87,6 +87,28 @@ If our telephony carrier partner or a Czech network operator flags Telocc's traf
    turns out not to be a personal-data breach — this is also register item 13
    evidence of a working anti-abuse framework.
 
+## Break-glass call-log access (ER-AUD-1)
+
+The application has **no in-app admin/"break-glass" route** — every API path that
+reads `calls`/`audit_events` is org-scoped by construction, with no operator role or
+endpoint that reads across organisations. This is safe by **absence of a code path**,
+not by an application-level access log.
+
+If an operator ever genuinely needs cross-org access to the call log (e.g. to scope a
+breach per the incident-response section above, or to answer a carrier/ČTÚ inquiry
+where the affected organisation cannot be identified any other way), the only route is
+direct database access outside the application, using the least-privilege database
+role (ER-SEC-4):
+
+1. Confirm no in-app path (export, settings, org-scoped API) already answers the
+   question — this procedure is a last resort.
+2. Connect with the least-privilege application role (never a superuser/owner role)
+   and run the minimum query needed to scope the incident.
+3. **Manually** record a reasoned entry in the internal incident/breach log (there is
+   no automated audit event for this — the runbook procedure itself is the control):
+   who, when, why, what was queried, and what was found.
+4. If this was triggered by a suspected breach, continue per "Incident response" above.
+
 ## Anomaly-scan alert triage (day-to-day)
 
 When the daily scheduled job (`packages/core/src/retention.ts`) writes an

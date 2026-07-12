@@ -75,7 +75,7 @@ telocc/
 │   │           ├── twiml.ts     # instruction → TwiML rendering
 │   │           ├── signature.ts # X-Twilio-Signature HMAC-SHA1 verification
 │   │           └── fixtures/    # recorded webhook payloads + API request/response shapes
-│   └── i18n/                    # thin typed i18n: en.ts (complete), cs.ts (placeholder)
+│   └── i18n/                    # thin typed i18n: en.ts (complete), cs.ts (partial — emergency-disclosure/verification namespace; rest falls back to en)
 ├── tests/
 │   ├── contract/                # THE CONTRACT LAYER — see docs/testing.md; off-limits
 │   └── helpers/                 # test app factory, db reset, MockTelco driver, mail capture
@@ -620,7 +620,7 @@ Carve-outs (billing/tax records once billing exists) are documented in the priva
 
 - **Stack:** React 19 + Vite, shadcn/ui + Tailwind 4, react-router v7 (library mode), TanStack Query over the `hono/client` typed RPC client (`AppType` imported from `apps/api` — no shared package needed).
 - **Pages:** `/login`; `/onboarding` (4-step wizard, §6); `/` dashboard (business number + status/capability warning, hours mode toggle, recent calls); `/calls` (paginated log: local-time timestamp, direction, status+reason badge, duration; CSV link); `/settings` (account, personal number + re-verify flow with emergency disclosure, office-hours editor, business-number details incl. provisioning state, danger zone: export JSON/CSV + delete with name confirmation); `/legal/privacy`, `/legal/terms`.
-- **i18n:** `packages/i18n` — `en.ts` as a `const` object of namespaced keys; `t('calls.status.emergency_refused')` typed against `keyof typeof en`; `cs.ts` is a typed placeholder (`Partial<Messages>` failing a completeness test only when enabled). All user-facing copy — including API-side email/SMS/disclosure text — goes through it. No library.
+- **i18n:** `packages/i18n` — `en.ts` as a `const` object of namespaced keys (the complete, source-of-truth dictionary); `t('calls.status.emergency_refused')` typed against a dotted-path `MessageKey`. A boring locale mechanism sits on top: `setLocale`/`getLocale` (module-level, default `'en'`) and `cs.ts`, a `DeepPartial<Messages>` covering only the ER-EMG-3 emergency-disclosure/verification namespace (plus the handful of strings shown alongside it) — `t()` resolves through the active locale first, falling back to `en` per-key, so a partial `cs` never produces a missing string. `apps/web`'s `main.tsx` calls `setLocale` once at startup from `navigator.language` (`cs*` → `'cs'`, else `'en'`) — no server negotiation, no stored preference, no re-render on change. All user-facing copy — including API-side email/SMS/disclosure text — goes through `t()`. No library. Czech translation of everything outside that namespace (and of the legal drafts) is an owner/translation backlog item, not a build gap.
 - **Dev simulator page** (`/dev/simulator`, compiled only when `VITE_ENABLE_SIM=1`, server routes 404 unless `ENABLE_DEV_ROUTES=1` — double gate):
   - Buttons: **Incoming customer call** (choose caller number), **Out-of-hours call** (one-click sets mode `always_closed`, fires call, restores), **Dial-in from verified phone** → live keypad for DTMF (try 604… → bridge; try 112 → refusal), **Hang up caller / callee**.
   - Panels: live call state (session state machine position, last instruction rendered), dev mailbox (magic links), SMS outbox (PINs), event log; call-log table refreshes by polling every 2 s.
@@ -703,8 +703,8 @@ README demo section: clone → the command → URL → four bullet walkthroughs 
 | ER-CLI-3 | `PresentedCli` branded type constructible only from an active business-number row (§4.1) |
 | ER-KYC-1 | `business_numbers.status` state machine; transitions only via seam events/polls; mock auto-approve; pending/rejected UI states |
 | ER-KYC-2 | `end_users`/`regulatory_bundles`/`kyc_documents`; `region_area_codes` seedable; `getRequiredDocuments` from provider; no catalog before KYC complete |
-| ER-KYC-3 | `number_class` enum; capabilities per class; release flow + lifecycle audit events; OKU placeholder in ToS draft |
-| ER-AUD-1 | `calls` append-only (write-once at terminal state; §5.3); org-scoped access; break-glass = documented runbook procedure w/ manual audit entry |
+| ER-KYC-3 | `number_class` enum + seam `supportedNumberClasses` capability list — **schema-level** readiness for more than one class, not a working pivot: today's provisioning (`apps/api/src/routes/numbers.ts`) hard-codes `numberClass: 'geographic'` at catalog search and at provisioning; release flow + lifecycle audit events; OKU placeholder in ToS draft |
+| ER-AUD-1 | `calls` append-only (write-once at terminal state; §5.3); org-scoped access with **no in-app admin/"break-glass" route at all** — safe by absence, not by logging; the only bypass is direct database access outside the application, governed by a documented runbook procedure (`docs/runbook.md`) with a manually recorded reasoned entry, never a logged application capability |
 | ER-AUD-2 | `audit_events` table + event list (§3.2) |
 | ER-AUD-3 | `scripts/esd-report.ts` (half-year cutoffs; survives anonymisation) |
 | ER-OBS-1 | `provider_error_code` on calls; CZ-destination failed+blocked share in the daily anomaly scan (`ANOMALY_CZ_FAILURE_PCT`, §9.9); `czCliDomesticTermination` capability + UI warning + runbook gate |
@@ -713,4 +713,4 @@ README demo section: clone → the command → URL → four bullet walkthroughs 
 | ER-ACC-1 | §11 accessibility baseline + axe pass in e2e |
 | ER-B2B-1 | org-creation declaration (literal-true zod) + stored artifact columns |
 | ER-BILL-1 | dormant billing tables (§3.2), exercised by tests only |
-| ER-POST-1 | `COMPLIANCE_POSTURE` consumed at exactly four points: onboarding § 63a step, ToS copy variant (i18n key), retention preset docs note, ESD script availability note; flip exercised by contract test |
+| ER-POST-1 | `COMPLIANCE_POSTURE` has exactly **one** real code branch today — `routes/orgs.ts`'s `isNbicsPosture` gate on the § 63a contract-summary/waiver step (§6 step 1) — flip exercised by `posture-flip.contract.test.ts`. The other three areas the requirement names are *not* separately code-branched: the ToS § 63a clause is static prose marked `[CONDITIONAL CLAUSE …]` for the owner/reader, not templated per posture; `scripts/esd-report.ts` runs unconditionally regardless of posture; there is no retention branch (retention windows are independent env vars, never read `COMPLIANCE_POSTURE`). This still satisfies the ER under today's `app_layer` default: nothing in ToS/ESD/retention needs to *differ* while posture is `app_layer`, so there is nothing for a second branch to do yet; the org-creation gate is the one place behavior actually changes on flip, and it demonstrates the pattern (a single config point, no redesign) the other three areas would follow if/when OWN-1 flips the posture and that copy/behavior needs to diverge. |

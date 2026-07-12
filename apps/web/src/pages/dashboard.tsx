@@ -88,6 +88,17 @@ export function DashboardPage() {
             {businessNumber.data.deliverabilityWarning && (
               <Alert variant="warning">{t('dashboard.deliverabilityWarning')}</Alert>
             )}
+            {businessNumber.data.status === 'rejected' &&
+              businessNumber.data.providerRejectionReason && (
+                <Alert variant="danger">
+                  <p className="font-medium">{t('dashboard.businessNumberRejected')}</p>
+                  <p className="mt-1">
+                    {t('dashboard.businessNumberRejectionReasonLabel')}:{' '}
+                    {businessNumber.data.providerRejectionReason}
+                  </p>
+                  <p className="mt-1">{t('dashboard.businessNumberRejectionRemediation')}</p>
+                </Alert>
+              )}
           </div>
         ) : (
           <p className="mt-3 text-neutral-500">{t('dashboard.businessNumberNone')}</p>

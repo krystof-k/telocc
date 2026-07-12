@@ -11,6 +11,7 @@ import { deletionTombstones, orgs, user } from '@telocc/db';
 import type { TelephonyProvider } from '@telocc/telephony';
 import { eq } from 'drizzle-orm';
 import { getOfficeHoursForOrg, type OfficeHoursSettings } from './office-hours.ts';
+import { writeAuditEvent } from './repos/audit.ts';
 import type { CallRow } from './repos/calls.ts';
 import { listCallsForOrg } from './repos/calls.ts';
 import { getEndUserByOrgId, listKycDocumentMeta } from './repos/kyc.ts';
@@ -151,7 +152,10 @@ export interface EraseAccountResult {
  * 3. The Better Auth `user` row — its `session`/`account` rows cascade from this
  *    delete via their own FKs (packages/db/src/schema/auth.ts), so a single delete
  *    here is enough to invalidate every session for that user.
- * 4. A `deletion_tombstones` row — counts only, never the org name or a phone number.
+ * 4. A **PII-free, org-less** `dsr_erasure` audit event — `org_id: null` (like the
+ *    `number_lifecycle` release event above) so it survives the org's own cascade,
+ *    with no email/org name/phone number in `meta` (ER-AUD-2).
+ * 5. A `deletion_tombstones` row — counts only, never the org name or a phone number.
  */
 export async function eraseAccount(
   db: Db,
@@ -201,7 +205,15 @@ export async function eraseAccount(
   // Step 3.
   await db.delete(user).where(eq(user.id, userId));
 
-  // Step 4 — counts only.
+  // Step 4 — PII-free, org_id:null (ER-AUD-2), so it survives the org cascade above.
+  await writeAuditEvent(db, {
+    orgId: null,
+    type: 'dsr_erasure',
+    retentionClass: 'lifecycle',
+    meta: { event: 'account_deleted' },
+  });
+
+  // Step 5 — counts only.
   const stats: Record<string, number> = {
     callsCount: allCalls.items.length,
     callRecordsDeleted,

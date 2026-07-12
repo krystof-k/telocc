@@ -5,6 +5,7 @@
  */
 import { zValidator } from '@hono/zod-validator';
 import { buildAccountExport, callsToCsv, eraseAccount } from '@telocc/core/dsr';
+import { writeAuditEvent } from '@telocc/core/repos/audit';
 import { getOrgById } from '@telocc/core/repos/orgs';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -35,6 +36,13 @@ export function dsrRoutes(deps: Deps) {
       const userId = c.get('userId');
       if (!orgId || !userId) return c.json({ error: 'no_org' }, 403);
       const bundle = await buildAccountExport(deps.db, orgId, userId);
+      // ER-AUD-2: org-scoped, PII-free (format only, no account/call contents).
+      await writeAuditEvent(deps.db, {
+        orgId,
+        actorUserId: userId,
+        type: 'export_requested',
+        meta: { format: 'json' },
+      });
       return c.json(bundle);
     },
   );
@@ -57,6 +65,13 @@ export function dsrRoutes(deps: Deps) {
       if (!orgId || !userId) return c.json({ error: 'no_org' }, 403);
       const bundle = await buildAccountExport(deps.db, orgId, userId);
       const csv = callsToCsv(bundle.calls);
+      // ER-AUD-2: org-scoped, PII-free (format only, no account/call contents).
+      await writeAuditEvent(deps.db, {
+        orgId,
+        actorUserId: userId,
+        type: 'export_requested',
+        meta: { format: 'csv' },
+      });
       return c.body(csv, 200, { 'content-type': 'text/csv; charset=utf-8' });
     },
   );

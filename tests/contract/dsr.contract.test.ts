@@ -17,7 +17,7 @@ import {
   user as userTable,
 } from '@telocc/db';
 import { parseE164 } from '@telocc/telephony';
-import { eq } from 'drizzle-orm';
+import { eq, isNull } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { setupContractTest } from '../helpers/context.ts';
 import {
@@ -271,5 +271,45 @@ describe('data subject rights: export and erasure', () => {
       .from(memberships)
       .where(eq(memberships.orgId, orgB.orgId));
     expect(orgBMembership.length).toBe(1);
+  });
+
+  // ER-AUD-2 strengthening: the audit events the enum reserves for export/erasure are
+  // actually written, not just declared (packages/core/src/repos/audit.ts).
+  it('the JSON export writes an org-scoped export_requested audit event with PII-free meta', async () => {
+    const { cookieHeader, orgId } = await readyOrgWithData();
+    const res = await getJson(ctx.app, '/api/export', { cookieHeader });
+    expect(res.status).toBe(200);
+
+    const events = await ctx.db.select().from(auditEvents).where(eq(auditEvents.orgId, orgId));
+    const exportEvents = events.filter((e) => e.type === 'export_requested');
+    expect(exportEvents.length).toBeGreaterThanOrEqual(1);
+    expect(exportEvents[0]?.meta).toEqual({ format: 'json' });
+  });
+
+  it('the CSV export writes an org-scoped export_requested audit event with PII-free meta', async () => {
+    const { cookieHeader, orgId } = await readyOrgWithData();
+    const res = await getJson(ctx.app, '/api/export/calls.csv', { cookieHeader });
+    expect(res.status).toBe(200);
+
+    const events = await ctx.db.select().from(auditEvents).where(eq(auditEvents.orgId, orgId));
+    const exportEvents = events.filter((e) => e.type === 'export_requested');
+    expect(exportEvents.length).toBeGreaterThanOrEqual(1);
+    expect(exportEvents[0]?.meta).toEqual({ format: 'csv' });
+  });
+
+  it('deletion writes a dsr_erasure audit event with org_id null and no PII in meta', async () => {
+    const { cookieHeader, orgId } = await createReadyOrg(ctx.app, ctx.db, ctx.mailbox);
+    const [orgRow] = await ctx.db.select().from(orgs).where(eq(orgs.id, orgId));
+    const orgName = orgRow?.name ?? '';
+
+    await postJson(ctx.app, '/api/account/delete', { confirmName: orgName }, { cookieHeader });
+
+    const nullOrgEvents = await ctx.db.select().from(auditEvents).where(isNull(auditEvents.orgId));
+    const erasureEvents = nullOrgEvents.filter((e) => e.type === 'dsr_erasure');
+    expect(erasureEvents.length).toBeGreaterThanOrEqual(1);
+    const latest = erasureEvents.at(-1);
+    expect(latest?.orgId).toBeNull();
+    const serializedMeta = JSON.stringify(latest?.meta ?? {});
+    expect(serializedMeta.includes(orgName)).toBe(false);
   });
 });

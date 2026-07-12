@@ -137,7 +137,7 @@ Conventions: "seam" = the telephony-provider abstraction from the brief; "mock" 
 ### ER-EMG-3 — Emergency-limitation disclosure at three points
 - **What:** Prominent disclosure — "Telocc cannot carry emergency calls. To reach emergency services, hang up and dial 112 (or 150/155/158) directly from your phone's dialer." — shown (1) during personal-number verification, (2) in settings, (3) in the ToS.
 - **Why:** Reg #5 (industry practice for VoIP emergency limitation; the mitigation record if the posture question lands badly).
-- **How:** i18n-routed copy (Czech translation carries the same content); verification-flow step requires scrolling past/acknowledging it; ToS clause in ER-POL-2.
+- **How:** i18n-routed copy at points (1) and (2) — `packages/i18n` has a real locale mechanism (`setLocale`/`getLocale`, default `en`, per-key fallback) and a Czech (`cs.ts`) translation of exactly this emergency-disclosure/verification namespace, initialised in `apps/web` from `navigator.language`; verification-flow step requires scrolling past/acknowledging it. Point (3), the ToS, is static drafted prose (`docs/legal/tos.md`, ER-POL-2) — not i18n-templated. Czech translation of the rest of the app, and of the legal drafts, is an owner/translation backlog item, not part of this ER's scope.
 
 ---
 
@@ -149,9 +149,9 @@ Conventions: "seam" = the telephony-provider abstraction from the brief; "mock" 
 - **How:** Seam delivers the signalling CLI verbatim; application matches exact E.164 against the org's verified number; every accepted initiation writes initiator-person, source CLI, target, timestamps to the call log (ER-AUD-1).
 
 ### ER-CLI-2 — Forwarded-leg CLI strategy + always-callable business number
-- **What:** (a) The forwarded (inbound→personal) leg presents the **business number** as CLI by default; never pass through an original caller's CLI (a Czech fixed third-party CLI on a leg that may originate abroad would be blocked and is not Telocc's number to present). Strategy configurable at the seam. (b) The business number must **always accept inbound** — out-of-hours handling connects then declines with busy; the number is never parked unreachable while used as CLI.
+- **What:** (a) The forwarded (inbound→personal) leg presents the **business number** as CLI by default; never pass through an original caller's CLI (a Czech fixed third-party CLI on a leg that may originate abroad would be blocked and is not Telocc's number to present). Strategy configurable at the seam. (b) The business number must **always accept inbound** — out-of-hours handling declines at the signalling level (busy) without ever leaving the number unroutable or unresponsive; the number is never parked unreachable while used as CLI.
 - **Why:** Reg #9 ("callable back" limb); Reg #10 (both legs toward Czech phones are exposed to the international-arrival block).
-- **How:** `forwardedLegCliStrategy: 'business_number'` seam config (only value implemented in MVP); inbound webhook path has no code path that leaves the number unroutable; office-hours decline is an answered-then-declined disposition, logged.
+- **How:** `forwardedLegCliStrategy: 'business_number'` seam config (only value implemented in MVP); inbound webhook path has no code path that leaves the number unroutable; office-hours decline is `<Reject reason="busy"/>` — a signalling-level decline, never answered-then-declined (decisions.md #20) — logged as `declined/out_of_hours`. The compliance intent (the number always routed and responsive) is met either way; this documents the actual mechanism.
 
 ### ER-CLI-3 — Seam accepts only the org's provisioned number as presented identity
 - **What:** The seam's outbound-dial API takes the org's business-number entity (not a free-form CLI string). Arbitrary/user-supplied CLI values are unrepresentable in the interface.
@@ -173,18 +173,18 @@ Conventions: "seam" = the telephony-provider abstraction from the brief; "mock" 
 - **How:** KYC tables shaped like Twilio's Bundle/EndUser/SupportingDocument concepts behind the seam; the required-document checklist is fetched from the Regulations API at wiring rather than hard-coded (mock serves a fixture checklist); documents encrypted + EU-stored + org-scoped + deleted when no longer required (ER-SEC-1, ER-DSR-2); bundle SIDs recorded on the org; no number is offered to an org before its end-user record exists.
 
 ### ER-KYC-3 — Number-class attribute + end-user-of-record + open-ended lifecycle
-- **What:** The business-number entity carries a `number_class` attribute (`geographic | nomadic_910 | mobile`) so the product can pivot class without redesign; the customer org (not Telocc) is registered as end user of record; lifecycle states stay open-ended (ER-KYC-1 set) even though MVP uses few; on offboarding, numbers are released to the provider pool and the event audit-logged.
+- **What:** The business-number entity carries a `number_class` attribute (`geographic | nomadic_910 | mobile`) giving **schema-level** support for more than one class — the column and the seam's `supportedNumberClasses` capability list both already model it — so a future pivot needs a provisioning-flow change, not a schema/data migration; the customer org (not Telocc) is registered as end user of record; lifecycle states stay open-ended (ER-KYC-1 set) even though MVP uses few; on offboarding, numbers are released to the provider pool and the event audit-logged.
 - **Why:** Reg #10/OWN-5 (number class may be the practical fix for CZ→CZ blocking); Reg #6 (chain of title); Reg #8 (clean future port-out; ToS OKU placeholder).
-- **How:** Enum column + seam capability flags per class; release flow through the seam; ToS clauses in ER-POL-2.
+- **How:** Enum column + seam capability flags per class (schema-ready); **today's provisioning flow hard-codes `numberClass: 'geographic'`** at both catalog search and provisioning (`apps/api/src/routes/numbers.ts`) — supporting `nomadic_910`/`mobile` in practice still needs that call-site change, just not a data-model one; release flow through the seam; ToS clauses in ER-POL-2.
 
 ---
 
 ## 10. Audit trail & observability
 
 ### ER-AUD-1 — Call log as immutable audit trail
-- **What:** Append-only call log, org-scoped: timestamp, direction, duration, status (answered / missed / declined / failed / blocked / `emergency_refused` / `destination_blocked`), initiating person (outbound), source CLI, target, provider disposition/error code. Access restricted to the org itself plus break-glass admin, with admin access logged.
+- **What:** Append-only call log, org-scoped: timestamp, direction, duration, status (answered / missed / declined / failed / blocked / `emergency_refused` / `destination_blocked`), initiating person (outbound), source CLI, target, provider disposition/error code. Access restricted to the org itself; there is no in-app admin/"break-glass" route at all.
 - **Why:** Reg #9 (demonstrable CLI legitimacy per presentation); Reg #13 (traffic-legitimacy evidence for carrier/ČTÚ inquiries); Reg #21 (breach scoping); Reg #22 (access restriction); Reg #12 (evidence trail if a customer's calling is challenged).
-- **How:** No UPDATE path on call rows in application code (status transitions modeled as final-state writes from webhook events); retention per ER-RET-1; admin break-glass wrapped in a logged, reasoned action.
+- **How:** No UPDATE path on call rows in application code (status transitions modeled as final-state writes from webhook events); retention per ER-RET-1. Break-glass is safe by **absence**, not by logging: no code path exists for an admin to read across orgs — the only way to bypass org-scoping is direct database access outside the application, which is a documented runbook procedure (`docs/runbook.md` "Break-glass call-log access"), not a logged application capability; an operator who ever exercises it manually records a reasoned entry per that procedure.
 
 ### ER-AUD-2 — Admin & auth event log
 - **What:** Log of security-relevant events: logins, magic-link issuance/use, PIN issuance/attempts (no secret values), settings changes (verified-number change, office hours), number lifecycle transitions, deletion/export actions.
@@ -278,7 +278,7 @@ Conventions: "seam" = the telephony-provider abstraction from the brief; "mock" 
 ### ER-POST-1 — One config point per posture-dependent behavior
 - **What:** The behaviors that change if the owner adopts posture A (NB-ICS provider) are each behind a single, documented config point: contract-flow artifacts (§ 63a summary + waiver step), retention preset (service/billing window only — see Reg #23 for why no § 97 preset is shipped), user-facing "who is the provider" copy in ToS, and the reporting export (ER-AUD-3). No "we are not a telco" claim is hard-coded in user-facing copy.
 - **Why:** Reg #1–#4 (the classification is open; the build must not need redesign under either answer).
-- **How:** `compliance.posture: 'app_layer' | 'nbics_provider'` config consumed only at these four points; default `app_layer`; flipping it in a test exercises the § 63a step and the export.
+- **How:** `COMPLIANCE_POSTURE: 'app_layer' | 'nbics_provider'` env config, default `app_layer`. Today it has exactly **one** real code branch — `routes/orgs.ts`'s gate on the § 63a contract-summary/waiver step — exercised by `posture-flip.contract.test.ts`. The other three areas named above are not separately code-branched yet: ToS carries the § 63a clause as static prose (marked `[CONDITIONAL CLAUSE …]` for the reader, not templated), `scripts/esd-report.ts` runs unconditionally regardless of posture, and retention windows are independent env vars that never read `COMPLIANCE_POSTURE`. That's sufficient while posture is `app_layer` — none of those three need to differ yet — and the org-creation gate is the working proof that a posture flip is a config point, not a redesign, for whichever of them need to diverge if OWN-1 ever flips it.
 
 ---
 

@@ -138,6 +138,10 @@ export const en = {
     resumeSetup: 'Resume setup',
     businessNumberTitle: 'Business number',
     businessNumberNone: 'No business number yet.',
+    businessNumberRejected: 'This business-number request was rejected.',
+    businessNumberRejectionReasonLabel: 'Reason',
+    businessNumberRejectionRemediation:
+      'Update the required documents and business details, then submit again.',
     officeHoursTitle: 'Office hours',
     officeHoursManage: 'Manage office hours',
     recentCallsTitle: 'Recent calls',
@@ -184,6 +188,10 @@ export const en = {
     businessNumberStatus: 'Status',
     businessNumberActivatedAt: 'Active since',
     businessNumberNone: 'No business number provisioned yet.',
+    businessNumberRejected: 'This business-number request was rejected.',
+    businessNumberRejectionReasonLabel: 'Reason',
+    businessNumberRejectionRemediation:
+      'Update the required documents and business details, then submit again.',
     dangerZoneBody: 'These actions are permanent. Read carefully before continuing.',
     exportJson: 'Download full data export (JSON)',
     exportCallsCsv: 'Download call log (CSV)',
