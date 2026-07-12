@@ -6,19 +6,25 @@
  * "Org-scoping pattern" point 3).
  *
  * Flow (design.md §4.3): verifyWebhook → parseWebhook → zod-validate the neutral event
- * (belt over the seam boundary) → minimal inbound routing (§5.1/§5.0) → renderInstruction.
+ * (belt over the seam boundary) → load context → dispatch to `packages/core`'s pure
+ * routing/call-log functions → persist whatever they decided → renderInstruction. This
+ * file is a thin adapter: it does the I/O (loading business numbers/org/membership/
+ * office-hour rules/call_sessions, and persisting session/`calls` writes); the actual
+ * decisions (§5.1 inbound routing, §5.0 finalization) live in
+ * `core/routing/inbound.ts` and `core/call-log.ts` (decisions.md #44 — this replaces
+ * M4's inline flow with delegation to those now-implemented modules).
  *
- * SCOPE NOTE: `core/routing/inbound.ts` (M5) and `core/routing/dialin.ts` (M6) are still
- * stubs — those milestones own the full state machines. This file implements just
- * enough of the inbound (customer → business number) flow, inline, to satisfy this
- * milestone's contract gates (webhook-auth, provisioning, the rate-limits webhook
- * case): office-hours + verified-number gating, session bookkeeping, and
- * `call.completed` finalization per §5.0. It never creates a `dialin`-kind session
- * (that entry condition — signalling CLI exactly matching the org's verified personal
- * number — is M6's dial-policy/dialin machine), so `call.dtmf` is always a no-op here.
- * M5/M6 will very likely refactor this file to delegate to their state machines.
+ * SCOPE NOTE: `core/routing/dialin.ts` (M6) is still a stub — this file never creates a
+ * `dialin`-kind `call_sessions` row (that entry condition — signalling CLI exactly
+ * matching the org's verified personal number — is M6's dial-policy/dialin machine), so
+ * `call.dtmf` is always acked-and-ignored here.
  */
 import { createHash } from 'node:crypto';
+import {
+  deriveFinalization,
+  deriveLegRecordUpdate,
+  writeTerminalCall,
+} from '@telocc/core/call-log';
 import { writeAuditEvent } from '@telocc/core/repos/audit';
 import {
   findBusinessNumberByBundleRef,
@@ -26,10 +32,10 @@ import {
   findBusinessNumberByProviderNumberRef,
   updateBusinessNumberStatus,
 } from '@telocc/core/repos/numbers';
+import { decideInboundIncoming } from '@telocc/core/routing/inbound';
 import {
   businessNumbers,
   callSessions,
-  calls,
   memberships,
   officeHourRules,
   orgs,
@@ -38,8 +44,6 @@ import {
 import {
   type CallInstruction,
   MalformedWebhookError,
-  parseE164,
-  presentedCli,
   type RawWebhookRequest,
   type RenderContext,
   type TelephonyEvent,
@@ -104,62 +108,7 @@ function assertNever(x: never): never {
 }
 
 // ---------------------------------------------------------------------------
-// Office hours (design.md §8) — minimal inline evaluation. M5 owns the real,
-// reusable `core/office-hours.ts::isOpen`; this mirrors its documented algorithm
-// (Intl-based, zero deps) just enough for the inbound decision above.
-// ---------------------------------------------------------------------------
-
-interface OfficeHourRuleRow {
-  weekday: number;
-  opensAt: string;
-  closesAt: string;
-}
-
-const WEEKDAY_INDEX: Record<string, number> = {
-  Mon: 0,
-  Tue: 1,
-  Wed: 2,
-  Thu: 3,
-  Fri: 4,
-  Sat: 5,
-  Sun: 6,
-};
-
-function minutesOf(hhmmss: string): number {
-  const [h, m] = hhmmss.split(':');
-  return Number(h ?? 0) * 60 + Number(m ?? 0);
-}
-
-function isOrgOpenNow(
-  mode: 'schedule' | 'always_open' | 'always_closed',
-  rules: OfficeHourRuleRow[],
-  now: Date,
-  timezone: string,
-): boolean {
-  if (mode === 'always_open') return true;
-  if (mode === 'always_closed') return false;
-
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    hourCycle: 'h23',
-    weekday: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).formatToParts(now);
-  const weekdayShort = parts.find((p) => p.type === 'weekday')?.value ?? '';
-  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
-  const minute = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
-  const weekday = WEEKDAY_INDEX[weekdayShort];
-  if (weekday === undefined) return false;
-
-  const rule = rules.find((r) => r.weekday === weekday);
-  if (!rule) return false;
-  const minutesNow = hour * 60 + minute;
-  return minutesNow >= minutesOf(rule.opensAt) && minutesNow < minutesOf(rule.closesAt);
-}
-
-// ---------------------------------------------------------------------------
-// Signature-failure counting → synchronous anomaly flag (decisions.md #39).
+// Signature-failure counting → synchronous anomaly flag (decisions.md #39/#48).
 // ---------------------------------------------------------------------------
 
 const SIGNATURE_FAILURE_SCOPE = 'webhook_invalid_signature';
@@ -199,56 +148,6 @@ async function recordInvalidSignature(deps: Deps, reason: string): Promise<void>
   }
 }
 
-// ---------------------------------------------------------------------------
-// calls-table writer. `core/call-log.ts` (design.md §3.2, decisions.md #19) is the
-// documented long-term "only module inserting into calls"; it is still an M5/M6 stub,
-// so this file writes directly (permitted here — see the file-header note) until that
-// lands and this can delegate instead.
-// ---------------------------------------------------------------------------
-
-type CallStatus =
-  | 'answered'
-  | 'missed'
-  | 'declined'
-  | 'failed'
-  | 'blocked'
-  | 'emergency_refused'
-  | 'destination_blocked';
-
-interface TerminalCallInput {
-  orgId: string;
-  businessNumberId: string;
-  direction: 'inbound' | 'outbound';
-  status: CallStatus;
-  reason: string | null;
-  fromE164: string | null;
-  toE164: string | null;
-  startedAt: Date;
-  answeredAt?: Date | null;
-  endedAt: Date;
-  durationSeconds?: number;
-  providerCallRef: string;
-  providerErrorCode?: string | null;
-}
-
-async function writeTerminalCall(deps: Deps, input: TerminalCallInput): Promise<void> {
-  await deps.db.insert(calls).values({
-    orgId: input.orgId,
-    businessNumberId: input.businessNumberId,
-    direction: input.direction,
-    status: input.status,
-    reason: input.reason,
-    fromE164: input.fromE164,
-    toE164: input.toE164,
-    startedAt: input.startedAt,
-    answeredAt: input.answeredAt ?? null,
-    endedAt: input.endedAt,
-    durationSeconds: input.durationSeconds ?? 0,
-    providerCallRef: input.providerCallRef,
-    providerErrorCode: input.providerErrorCode ?? null,
-  });
-}
-
 function renderInstructionResponse(
   deps: Deps,
   instruction: CallInstruction,
@@ -263,7 +162,7 @@ function renderInstructionResponse(
 }
 
 // ---------------------------------------------------------------------------
-// Per-event-type handlers.
+// Per-event-type handlers — I/O + dispatch to packages/core's pure decisions.
 // ---------------------------------------------------------------------------
 
 async function handleCallIncoming(
@@ -292,81 +191,35 @@ async function handleCallIncoming(
     .from(officeHourRules)
     .where(eq(officeHourRules.orgId, orgId));
 
-  const now = deps.now();
-  const hasVerifiedNumber =
+  const hasVerifiedPersonalNumber =
     membership?.personalNumberVerifiedAt != null && membership.personalNumberE164 != null;
 
-  if (!hasVerifiedNumber) {
-    await writeTerminalCall(deps, {
-      orgId,
-      businessNumberId: businessNumber.id,
-      direction: 'inbound',
-      status: 'declined',
-      reason: 'no_verified_number',
-      fromE164: event.from,
-      toE164: event.to,
-      startedAt: event.at,
-      endedAt: event.at,
-      providerCallRef: event.callRef,
-    });
-    return renderInstructionResponse(deps, { kind: 'reject', cause: 'busy' }, event.callRef);
-  }
+  const decision = decideInboundIncoming({
+    now: deps.now(),
+    callRef: event.callRef,
+    from: event.from,
+    at: event.at,
+    orgId,
+    businessNumber: { id: businessNumber.id, e164: businessNumber.e164 },
+    hasVerifiedPersonalNumber,
+    personalNumberE164: membership?.personalNumberE164 ?? null,
+    officeHoursMode: org?.officeHoursMode ?? 'always_closed',
+    officeHourRules: rules,
+    timezone: org?.timezone ?? 'Europe/Prague',
+  });
 
-  const open = org ? isOrgOpenNow(org.officeHoursMode, rules, now, org.timezone) : false;
-  if (!open) {
-    await writeTerminalCall(deps, {
-      orgId,
-      businessNumberId: businessNumber.id,
-      direction: 'inbound',
-      status: 'declined',
-      reason: 'out_of_hours',
-      fromE164: event.from,
-      toE164: event.to,
-      startedAt: event.at,
-      endedAt: event.at,
-      providerCallRef: event.callRef,
-    });
-    return renderInstructionResponse(deps, { kind: 'reject', cause: 'busy' }, event.callRef);
-  }
-
-  const personalE164 = parseE164(membership?.personalNumberE164 ?? '');
-  if (!personalE164) {
-    // Defensive: the DB CHECK constraint should make this unreachable in practice.
-    await writeTerminalCall(deps, {
-      orgId,
-      businessNumberId: businessNumber.id,
-      direction: 'inbound',
-      status: 'declined',
-      reason: 'no_verified_number',
-      fromE164: event.from,
-      toE164: event.to,
-      startedAt: event.at,
-      endedAt: event.at,
-      providerCallRef: event.callRef,
-    });
+  if (decision.outcome === 'declined') {
+    await writeTerminalCall(deps.db, decision.callLogWrite);
     return renderInstructionResponse(deps, { kind: 'reject', cause: 'busy' }, event.callRef);
   }
 
   // Idempotent: a redelivered call.incoming for the same callRef is a no-op.
   await deps.db
     .insert(callSessions)
-    .values({
-      orgId,
-      businessNumberId: businessNumber.id,
-      providerCallRef: event.callRef,
-      kind: 'inbound',
-      state: 'forwarding',
-      fromE164: event.from,
-    })
+    .values(decision.sessionInsert)
     .onConflictDoNothing({ target: callSessions.providerCallRef });
 
-  const instruction: CallInstruction = {
-    kind: 'forward',
-    to: personalE164,
-    callerId: presentedCli({ id: businessNumber.id, e164: businessNumber.e164, status: 'active' }),
-    timeoutSeconds: 120,
-  };
-  return renderInstructionResponse(deps, instruction, event.callRef);
+  return renderInstructionResponse(deps, decision.instruction, event.callRef);
 }
 
 async function handleCallLeg(
@@ -386,21 +239,21 @@ async function handleCallLeg(
     return Response.json({ ignored: true }, { status: 200 });
   }
 
-  if (event.legStatus === 'answered') {
-    await deps.db
-      .update(callSessions)
-      .set({ answeredAt: event.at, state: 'bridged', updatedAt: deps.now() })
-      .where(eq(callSessions.id, session.id));
-  } else {
-    await deps.db
-      .update(callSessions)
-      .set({
-        lastLegStatus: event.legStatus,
-        lastLegErrorCode: event.errorCode ?? null,
-        updatedAt: deps.now(),
-      })
-      .where(eq(callSessions.id, session.id));
-  }
+  const update = deriveLegRecordUpdate({
+    legStatus: event.legStatus,
+    errorCode: event.errorCode,
+    at: event.at,
+  });
+  await deps.db
+    .update(callSessions)
+    .set({
+      ...(update.answeredAt ? { answeredAt: update.answeredAt } : {}),
+      ...(update.state ? { state: update.state } : {}),
+      ...(update.lastLegStatus ? { lastLegStatus: update.lastLegStatus } : {}),
+      ...(update.lastLegStatus ? { lastLegErrorCode: update.lastLegErrorCode ?? null } : {}),
+      updatedAt: deps.now(),
+    })
+    .where(eq(callSessions.id, session.id));
   return Response.json({ ok: true }, { status: 200 });
 }
 
@@ -451,40 +304,45 @@ async function handleCallCompleted(
     .where(eq(businessNumbers.id, session.businessNumberId));
   const businessNumber = businessNumberRows[0] ?? null;
 
-  let status: CallStatus;
-  let reason: string | null;
-  let providerErrorCode: string | null = null;
+  const outcome = deriveFinalization(
+    {
+      kind: session.kind,
+      state: session.state,
+      answeredAt: session.answeredAt,
+      lastLegStatus: session.lastLegStatus,
+      lastLegErrorCode: session.lastLegErrorCode,
+    },
+    { durationSeconds: event.durationSeconds, errorCode: event.errorCode },
+  );
 
-  if (session.answeredAt) {
-    status = 'answered';
-    reason = null;
-  } else if (session.lastLegStatus === 'busy' || session.lastLegStatus === 'no_answer') {
-    status = 'missed';
-    reason = null;
-  } else if (session.lastLegStatus === 'failed') {
-    status = 'failed';
-    reason = null;
-    providerErrorCode = session.lastLegErrorCode ?? event.errorCode ?? null;
-  } else {
-    // No dialled-leg outcome at all — the caller hung up while ringing (§5.0).
-    status = session.kind === 'dialin' && session.state === 'collecting' ? 'failed' : 'missed';
-    reason = 'caller_hangup';
+  // Outbound (dial-in) finalization's initiating user is M6 territory — this
+  // milestone's call.incoming never creates a `dialin`-kind session, so the branch
+  // below is unreachable today but keeps the writer forward-compatible without a
+  // future redesign of this adapter.
+  let initiatingUserId: string | null = null;
+  if (session.kind === 'dialin') {
+    const membershipRows = await deps.db
+      .select()
+      .from(memberships)
+      .where(eq(memberships.orgId, session.orgId));
+    initiatingUserId = membershipRows[0]?.userId ?? null;
   }
 
-  await writeTerminalCall(deps, {
+  await writeTerminalCall(deps.db, {
     orgId: session.orgId,
     businessNumberId: session.businessNumberId,
     direction: session.kind === 'dialin' ? 'outbound' : 'inbound',
-    status,
-    reason,
+    status: outcome.status,
+    reason: outcome.reason,
     fromE164: session.fromE164,
     toE164: session.kind === 'dialin' ? session.targetE164 : (businessNumber?.e164 ?? null),
+    initiatingUserId,
     startedAt: session.createdAt,
-    answeredAt: session.answeredAt ?? null,
+    answeredAt: outcome.answeredAt,
     endedAt: event.at,
-    durationSeconds: session.answeredAt ? event.durationSeconds : 0,
+    durationSeconds: outcome.durationSeconds,
     providerCallRef: event.callRef,
-    providerErrorCode,
+    providerErrorCode: outcome.providerErrorCode,
   });
 
   await deps.db.delete(callSessions).where(eq(callSessions.id, session.id));

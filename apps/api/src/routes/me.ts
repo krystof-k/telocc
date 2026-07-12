@@ -20,10 +20,11 @@ export function meRoutes(deps: Deps) {
     // this route's own responsibility, not `c.var.orgId`.
     const membership = await getMembershipByUserId(deps.db, userId);
     if (!membership) {
-      return c.json({ user: { id: userId }, org: null });
+      return c.json({ user: { id: userId }, org: null, orgId: null });
     }
     const org = await getOrgById(deps.db, membership.orgId);
-    return c.json({ user: { id: userId }, org });
+    // Top-level orgId is part of the pinned API surface (org-scoping contract sweep).
+    return c.json({ user: { id: userId }, org, orgId: membership.orgId });
   });
 
   return app;

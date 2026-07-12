@@ -6,11 +6,13 @@ import { requireOrg } from './middleware/org.ts';
 import { securityHeaders } from './middleware/security-headers.ts';
 import { requireSession } from './middleware/session.ts';
 import { authRoutes } from './routes/auth.ts';
+import { callsRoutes } from './routes/calls.ts';
 import { devRoutes } from './routes/dev/index.ts';
 import { healthRoute } from './routes/health.ts';
 import { kycRoutes } from './routes/kyc.ts';
 import { meRoutes } from './routes/me.ts';
 import { numbersRoutes } from './routes/numbers.ts';
+import { officeHoursRoutes } from './routes/office-hours.ts';
 import { orgsRoutes } from './routes/orgs.ts';
 import { verificationsRoutes } from './routes/verifications.ts';
 import { webhooksRoutes } from './routes/webhooks.ts';
@@ -58,6 +60,8 @@ export function buildApp(deps: Deps) {
   app.route('/api/verifications', verificationsRoutes(deps));
   app.route('/api/kyc', kycRoutes(deps));
   app.route('/api', numbersRoutes(deps));
+  app.route('/api', officeHoursRoutes(deps));
+  app.route('/api', callsRoutes(deps));
 
   return app;
 }

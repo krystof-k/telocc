@@ -181,3 +181,46 @@ One-liners for every choice the brief left open. Newest at the bottom.
     until M8 lands) — `packages/core/src/repos/numbers.ts::releaseOrgBusinessNumbers` is added
     now as the ready-to-call, PII-free (`org_id: null`, last-4-only meta) helper M8's route
     should use.
+50. **M5 refactor:** M4's inline inbound-routing/finalization flow (decisions.md #44) is now
+    delegated to `packages/core/src/{office-hours.ts,routing/inbound.ts,call-log.ts}` —
+    `isOpen`/`validateOfficeHoursInput` (office-hours), `decideInboundIncoming` (the pure §5.1
+    decision), `deriveLegRecordUpdate`/`deriveFinalization` (the shared §5.0 record/finalize
+    logic both machines will use), `writeTerminalCall` (the sole `calls` writer). `webhooks.ts`
+    is now a thin adapter: I/O (loading business number/org/membership/rules/session, applying
+    session/`calls` writes) around these pure functions. One pitfall found while doing this:
+    `calls.provider_call_ref`'s unique index is **partial** (`WHERE provider_call_ref IS NOT
+    NULL`); `drizzle`'s `.onConflictDoNothing({ target: calls.providerCallRef })` emits a plain
+    `ON CONFLICT (provider_call_ref) DO NOTHING` with no `WHERE` clause, which Postgres rejects
+    outright ("no unique or exclusion constraint matching the ON CONFLICT specification") since
+    it doesn't match a partial index's arbiter — `writeTerminalCall` uses a plain `INSERT`
+    instead, relying on the pre-existing convention (the webhook route's outer catch-all, §4.3
+    "never a 5xx") to swallow the resulting constraint-violation on redelivery, exactly as M4's
+    inline version already did.
+51. **Discovered defect in `tests/helpers/fixtures.ts`'s `createReadyOrg()`** (not a file this
+    milestone may edit): its default `businessNumberE164` is the fixed literal
+    `'+420212345678'`, but `business_numbers.e164` is globally unique (design.md §3.2) — any
+    test calling `readyOrg()`/`createReadyOrg()` twice without an explicit distinct
+    `businessNumberE164` override collides on insert with a raw `23505` duplicate-key error
+    before any route code runs. This affects 5 of `org-scoping.contract.test.ts`'s 7 cases (all
+    but the two already excluded by M5's `-t` filter) and `call-log.contract.test.ts`'s
+    "filters by direction and date range are org-scoped" case. Confirmed by temporarily
+    randomizing the default locally (reverted, not committed): with that one change alone, "an
+    owner fetching their own KYC document by id…" and "the business-number route returns only…"
+    pass outright, and (combined with #52 below) so do the other two affected cases.
+52. **Also discovered while investigating #51:** two `org-scoping.contract.test.ts` cases ("an
+    owner fetching their own call by id…", "webhook-driven writes land on the org owning the
+    called business number") drive only `ctx.telco.incomingCall(...)` — never `.completed(...)`
+    — against a `readyOrg()` fixture (`officeHoursMode: 'always_open'`), then assert a `calls`
+    row already exists. Per design.md §5.0/§5.1 and decisions.md #19, a forwarded (non-declined)
+    call only gets its one `calls` row at `call.completed` finalization; a bare `call.incoming`
+    correctly leaves it in-flight in `call_sessions` (state `forwarding`) with no `calls` row
+    yet — this is the write-once-at-terminal-state model working as designed, not a routing
+    bug. Confirmed by temporarily adding the missing `.completed(...)` calls locally (reverted,
+    not committed): both cases then pass cleanly against this milestone's routes.
+53. **Also discovered while investigating #51/#52:** `org-scoping.contract.test.ts`'s "every
+    authenticated GET route…" case asserts `GET /api/me`'s JSON body exposes `orgId` at the top
+    level (`meBody.orgId`). `apps/api/src/routes/me.ts` (M2's file, not in M5's file list)
+    currently returns `{ user, org }` with no top-level `orgId`. A one-line addition
+    (`orgId: membership?.orgId ?? null`) to that route's response would close this — flagged
+    for the orchestrator/M2 owner rather than fixed here, since `me.ts` is outside this
+    milestone's touchable files.

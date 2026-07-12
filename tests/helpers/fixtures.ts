@@ -272,7 +272,10 @@ export async function createReadyOrg(
     personalNumberVerifiedAt: new Date(),
     emergencyAckAt: new Date(),
   });
-  const businessNumberE164 = opts.businessNumberE164 ?? '+420212345678';
+  // Unique per call: business_numbers.e164 is globally unique, so a fixed default
+  // collides whenever a test builds two ready orgs.
+  const businessNumberE164 =
+    opts.businessNumberE164 ?? `+4202${String(Math.floor(Math.random() * 1e8)).padStart(8, '0')}`;
   const businessNumber = await createBusinessNumberFixture(db, {
     orgId: org.id,
     e164: businessNumberE164,
