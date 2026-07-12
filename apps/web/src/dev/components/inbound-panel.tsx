@@ -40,19 +40,38 @@ export function InboundCallPanel({ businessNumberE164 }: { businessNumberE164: s
     setError(null);
     setMessage(null);
     try {
-      const ref = generateCallRef('sim_inbound');
-      const result = await simIncomingCall({ callRef: ref, to: businessNumberE164, from: caller });
-      if (result.instruction?.kind === 'forward') {
-        setCallRef(ref);
-        setPhase('ringing');
-        setMessage('Ringing your verified personal number…');
-      } else {
-        setCallRef(ref);
-        setPhase('declined');
-        setMessage('Declined — busy signal (no greeting, no voicemail).');
+      // Force "in hours" for the routing decision so this walkthrough works whatever
+      // the real wall clock says (the seeded schedule is Mon-Fri 9-17 Europe/Prague),
+      // mirroring OutOfHoursPanel's always_closed toggle. Routing is decided at
+      // call.incoming; the answer/hangup events below are not office-hours-gated,
+      // so restoring immediately after is safe.
+      const original = await getOfficeHours();
+      await putOfficeHours({ ...original, mode: 'always_open' });
+      try {
+        const ref = generateCallRef('sim_inbound');
+        const result = await simIncomingCall({
+          callRef: ref,
+          to: businessNumberE164,
+          from: caller,
+        });
+        if (result.instruction?.kind === 'forward') {
+          setCallRef(ref);
+          setPhase('ringing');
+          setMessage('Ringing your verified personal number…');
+        } else {
+          setCallRef(ref);
+          setPhase('declined');
+          setMessage('Declined — busy signal (no greeting, no voicemail).');
+        }
+      } finally {
+        await putOfficeHours(original);
       }
-    } catch {
-      setError('Something went wrong firing the simulated call.');
+    } catch (err) {
+      setError(
+        err instanceof DevApiError && err.status === 401
+          ? 'Sign in as the demo user first — this flow toggles office hours via your session.'
+          : 'Something went wrong firing the simulated call.',
+      );
     } finally {
       setBusy(false);
     }
@@ -95,8 +114,8 @@ export function InboundCallPanel({ businessNumberE164 }: { businessNumberE164: s
     <Card data-testid="sim-inbound-panel">
       <CardTitle>Inbound customer call</CardTitle>
       <p className="mt-1 text-sm text-neutral-600">
-        Simulates a customer dialling your business number during office hours — it forwards to your
-        verified personal number.
+        Simulates a customer dialling your business number during office hours (temporarily forced
+        open, then restored) — it forwards to your verified personal number.
       </p>
       <div className="mt-4 flex flex-col gap-3">
         <div className="flex flex-col gap-1">

@@ -18,7 +18,8 @@ corepack enable && pnpm install && pnpm demo
 That one command checks for Docker, brings up a local Postgres, migrates it, seeds a
 fully-configured demo organisation, and starts the API (mock telephony provider) and the
 web app. No cloud accounts, no credentials, no Twilio, no manual steps in between —
-usually ready in well under a minute.
+usually ready in well under a minute with warm caches; the first-ever run on a fresh
+machine takes a few minutes longer while pnpm and Docker download their pieces.
 
 When it's done you'll see something like:
 
@@ -55,7 +56,9 @@ call log fill in without a handset.
    organisation is pre-onboarded (verified personal number, KYC, an active business
    number) so you land straight on the dashboard.
 2. **Inbound, in hours and out of hours.** Under *Inbound customer call*, click **Call
-   now** — the simulated customer call forwards to the demo's verified personal number;
+   now** — office hours are temporarily forced open (so this works whatever your real
+   clock says), and the simulated customer call forwards to the demo's verified personal
+   number;
    choose **Answer** or **Don't pick up** to see `answered`/`missed` land in the call
    log. Under *Out-of-hours call*, click **Simulate an out-of-hours call** — it
    temporarily forces office hours closed, fires the same kind of call, and you'll see it

@@ -51,7 +51,9 @@ export function setupContractTest(): ContractTestContext {
     app: App;
     rebuildApp: (envOverrides?: Record<string, string | undefined>) => App;
   };
-  let cleanup: () => Promise<void>;
+  // No-op default so a beforeAll failure surfaces as itself, not as a cascading
+  // "cleanup is not a function" TypeError in afterAll.
+  let cleanup: () => Promise<void> = async () => {};
 
   beforeAll(async () => {
     const isolated = await createIsolatedDatabase();
