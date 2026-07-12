@@ -87,3 +87,23 @@ One-liners for every choice the brief left open. Newest at the bottom.
     `@radix-ui/react-slot`, `lucide-react`): required transitively by the shadcn/ui component
     pattern decisions.md #3 already committed to; not separately named in the pre-warmed
     package list but the same design choice, not a new one.
+37. **`GET /api/calls/:id` and `GET /api/kyc/documents/:id` are part of the pinned API
+    surface:** design.md §7's route table has no documented by-id GET route for either
+    resource; org-scoping.contract.test.ts's cross-org-404 cases assume these two routes.
+    This closes a table omission — it is not an open implementation choice.
+38. **MockTelco's wire format uses `kind`, not `do`:** design.md §4.4's example reject
+    body (`{do:'reject',cause:'busy'}`) is documentation shorthand, not a literal wire
+    requirement. The neutral `CallInstruction` type's canonical, typed discriminant is
+    `kind`; `tests/helpers/telco.ts` renders/parses `kind` and every contract test
+    reads `instruction.kind` (tests/helpers/README.md).
+39. **`anomaly_flagged` fires synchronously at rejection time, not only from the nightly
+    job:** the invalid-webhook-signature counter trips its alert threshold inline as
+    signatures are rejected (rate-limits.contract.test.ts, "invalid webhook signatures
+    increment a counter that trips the alert threshold"); design.md §9.9's daily job
+    scan is a second, additional source of the same `anomaly_flagged` audit-event type
+    (volume/night/CZ-failure-share thresholds), not the only one.
+40. **Rate-limit "per IP" identifier:** `X-Forwarded-For` in dev/test (the only IP
+    signal available to an in-process `app.request()` call — tests/helpers/README.md);
+    in production, `CF-Connecting-IP` is preferred when present (Cloudflare's
+    platform-verified origin-IP header, not client-forgeable at the edge), falling back
+    to `X-Forwarded-For` when absent.

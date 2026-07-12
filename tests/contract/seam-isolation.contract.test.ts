@@ -104,9 +104,18 @@ describe('seam isolation (static scans)', () => {
     const offenders: string[] = [];
     for (const file of candidates) {
       const source = read(file);
-      const importsConsoleLogger = /console\.(log|error|warn|info|debug)\s*\(/.test(source);
-      const importsOwnLogger = /from\s+['"].*lib\/log(\.ts)?['"]/.test(source);
-      if (importsConsoleLogger && !importsOwnLogger) {
+      // `console.*` is banned outright in these files, regardless of whether the
+      // redacting logger is ALSO imported: a stray `console.log` bypasses ER-SEC-4
+      // redaction entirely even sitting next to a correct `lib/log.ts` import, so the
+      // previous "only flag console usage when the own logger is absent" exemption
+      // was a hole — any console call here is a violation, full stop.
+      const usesConsole = /console\.(log|error|warn|info|debug|trace)\s*\(/.test(source);
+      // Third-party logging libraries are equally banned — only `lib/log.ts` may
+      // log in these files (ER-SEC-4: the redactor is the sole emission path).
+      const importsThirdPartyLogger =
+        /from\s+['"](pino|winston|debug|loglevel)(\/[^'"]*)?['"]/.test(source) ||
+        /require\(\s*['"](pino|winston|debug|loglevel)['"]\s*\)/.test(source);
+      if (usesConsole || importsThirdPartyLogger) {
         offenders.push(file);
       }
     }

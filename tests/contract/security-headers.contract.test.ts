@@ -1,6 +1,16 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { loginViaMagicLink } from '../helpers/auth.ts';
 import { setupContractTest } from '../helpers/context.ts';
 import { getJson } from '../helpers/http.ts';
+
+const ALLOWED_COOKIE_PREFIXES = ['telocc.session_token='];
+
+function disallowedCookies(res: Response): string[] {
+  const withGetSetCookie = res.headers as Headers & { getSetCookie?: () => string[] };
+  const setCookies = withGetSetCookie.getSetCookie?.() ?? [];
+  return setCookies.filter((c) => !ALLOWED_COOKIE_PREFIXES.some((prefix) => c.startsWith(prefix)));
+}
 
 /**
  * security-headers.contract.test.ts — headers & cookies (ER-COOK-1 API half,
@@ -23,11 +33,24 @@ describe('security headers', () => {
 
   it('no Set-Cookie other than the Better Auth session cookies is ever issued', async () => {
     const res = await getJson(ctx.app, '/health');
-    const withGetSetCookie = res.headers as Headers & { getSetCookie?: () => string[] };
-    const setCookies = withGetSetCookie.getSetCookie?.() ?? [];
-    const nonSessionCookies = setCookies.filter((c) => !c.startsWith('telocc.session_token='));
-    expect(nonSessionCookies).toEqual([]);
+    expect(disallowedCookies(res)).toEqual([]);
   });
+
+  it(
+    'the magic-link login flow (request + verify) issues no cookies other than the ' +
+      'Better Auth session cookie, at any step of the real boundary (ER-COOK-1)',
+    async () => {
+      const email = `cookie-sweep-${randomUUID()}@example.test`;
+      const { requestResponse, verifyResponse } = await loginViaMagicLink(
+        ctx.app,
+        ctx.mailbox,
+        email,
+      );
+
+      expect(disallowedCookies(requestResponse)).toEqual([]);
+      expect(disallowedCookies(verifyResponse)).toEqual([]);
+    },
+  );
 
   it('dev routes return 404 when ENABLE_DEV_ROUTES is off (production gate)', async () => {
     ctx.rebuildApp({ ENABLE_DEV_ROUTES: undefined });

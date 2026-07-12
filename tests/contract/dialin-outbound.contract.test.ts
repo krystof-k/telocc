@@ -131,6 +131,40 @@ describe('appless dial-in outbound', () => {
   });
 
   it(
+    "after partial consumption, the bridge instruction's max duration equals the cap " +
+      'minus minutes already used today — not the full cap',
+    async () => {
+      const { orgId, businessNumberE164, personalNumberE164 } = await readyOrg({
+        outboundDailyMinutesCap: 10,
+      });
+      const to = parseE164(businessNumberE164);
+      const from = parseE164(personalNumberE164);
+      if (!to || !from) throw new Error('bad fixture');
+
+      // First bridged call consumes 3 of the 10-minute daily cap.
+      const firstRef = `call_remaining_first_${randomUUID()}`;
+      await ctx.telco.incomingCall({ callRef: firstRef, to, from });
+      await ctx.telco.dtmf({ callRef: firstRef, digits: '604113000' });
+      await ctx.telco.legAnswered({ callRef: firstRef });
+      await ctx.telco.completed({ callRef: firstRef, durationSeconds: 180 }); // 3 minutes
+
+      // The second bridge instruction must reflect the REMAINDER (10 - 3 = 7 minutes),
+      // not the org's unconsumed full cap.
+      const secondRef = `call_remaining_second_${randomUUID()}`;
+      await ctx.telco.incomingCall({ callRef: secondRef, to, from });
+      const res = await ctx.telco.dtmf({ callRef: secondRef, digits: '604113001' });
+
+      expect(res.instruction?.kind).toBe('bridge');
+      if (res.instruction?.kind === 'bridge') {
+        expect(res.instruction.maxDurationSeconds).toBe(7 * 60);
+      }
+
+      const rows = await orgCalls(orgId);
+      expect(rows.some((r) => r.status === 'answered' && r.durationSeconds === 180)).toBe(true);
+    },
+  );
+
+  it(
     'either leg hanging up ends both legs and logs one answered outbound row with duration, ' +
       'initiator, source CLI and target (ER-AUD-1 fields)',
     async () => {

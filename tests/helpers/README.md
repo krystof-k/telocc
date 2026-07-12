@@ -84,8 +84,9 @@ describe('some area', () => {
   documents, so it doubles as the wire-contract M4 must match. One resolved ambiguity:
   design.md's example wire body for `reject` (`{do:'reject',cause:'busy'}`) uses a `do`
   key, but the neutral `CallInstruction` type uses `kind`; this helper renders/parses
-  `kind` (the canonical, typed field) — treat the `do` example as documentation
-  shorthand, not a literal wire-format requirement, unless corrected in `docs/decisions.md`.
+  `kind` (the canonical, typed field) — the `do` example is documentation shorthand,
+  not a literal wire-format requirement (now a pinned decision, decisions.md #38, not
+  an open question).
 
 - **`auth.ts`** — `requestMagicLink`/`loginViaMagicLink` drive the *real*
   `/api/auth/sign-in/magic-link` → capture mailbox → `/api/auth/magic-link/verify` path
@@ -96,10 +97,14 @@ describe('some area', () => {
 
 - **`fixtures.ts`** — direct-DB builders for preconditions that are *not* the boundary
   a given file is testing: `createOrgFixture`, `createMembershipFixture`,
-  `createBusinessNumberFixture`, `createOfficeHourRules`, `createEndUserFixture`, and
-  the composite `createReadyOrg(app, db, mailbox, opts)` (logs in for real, then
-  fixtures an org with a verified personal number + active business number + Mon-Fri
-  9-17 hours) — the common precondition for inbound/outbound/call-log/scoping cases.
+  `createBusinessNumberFixture`, `createOfficeHourRules`, `createEndUserFixture`,
+  `createKycDocumentFixture` (a minimal well-formed `kyc_documents` row — used by the
+  org-scoping cross-org by-id cases), `createCallSessionFixture` (a minimal in-flight
+  `call_sessions` row — used to prove erasure sweeps remove live session state, not
+  just the append-only `calls` log), and the composite `createReadyOrg(app, db,
+  mailbox, opts)` (logs in for real, then fixtures an org with a verified personal
+  number + active business number + Mon-Fri 9-17 hours) — the common precondition for
+  inbound/outbound/call-log/scoping cases.
 
 - **`http.ts`** — `getJson`/`postJson`/`putJson`/`deleteJson`/`jsonBody` thin wrappers
   around `app.request()` with a `cookieHeader` option.
@@ -117,13 +122,23 @@ them, since Node/Vite resolve relative to the importing file's own `node_modules
 
 ## Known ambiguities carried from testing.md/design.md (see the M1 report for the full list)
 
-- Rate-limit "per IP" identifiers are read from an `X-Forwarded-For` header (the only
-  IP signal available to an in-process `app.request()` call).
+- Rate-limit "per IP" identifiers are read from an `X-Forwarded-For` header in dev/test
+  (the only IP signal available to an in-process `app.request()` call); in production,
+  `CF-Connecting-IP` is preferred when present, falling back to `X-Forwarded-For`
+  (decisions.md #40 — a recorded decision, not an open question).
 - `auth.contract.test.ts`'s unauthenticated-route sweep excludes `/api/auth/*` and
   `POST /api/orgs` per testing.md's "except auth and org-creation preflight" wording.
-- `org-scoping.contract.test.ts`'s by-id 404 case assumes `GET /api/calls/:id` and
-  `GET /api/kyc/documents/:id` as the plausible detail routes (design.md's API table
-  has no by-id GET route documented for either resource).
+- `org-scoping.contract.test.ts`'s by-id 404 cases use `GET /api/calls/:id` and
+  `GET /api/kyc/documents/:id` as the detail routes (design.md's API table has no by-id
+  GET route documented for either resource) — **this is now a pinned decision, not an
+  open ambiguity** (decisions.md #37): both routes are part of the API surface the
+  contract layer requires, closing the table omission. Each case runs a positive
+  control (owner fetches their own resource → 200) immediately before the cross-org
+  404, so a route that 404s unconditionally can't pass by accident. The third member of
+  testing.md's "call/document/number by id" trio — the business number — has no by-id
+  route at all (it is deliberately one-per-org, singular `GET /api/business-number`);
+  its scoping equivalent is exercised through that existing singular route instead, so
+  it needed no new decisions.md entry.
 - `call-log.contract.test.ts` assumes `GET /api/calls` responds
   `{ items: CallRow[], nextCursor: string | null }`.
 - `posture-flip.contract.test.ts`'s ESD case assumes `scripts/esd-report.ts` prints one
@@ -134,4 +149,6 @@ them, since Node/Vite resolve relative to the importing file's own `node_modules
   not a behavioural shortcut.
 - `provisioning.contract.test.ts`'s "number release on account deletion" case assumes
   that lifecycle audit event is written with `org_id: null` (like `deletion_tombstones`)
-  so it survives the org's cascading delete.
+  so it survives the org's cascading delete; the case now also asserts the surviving
+  row's serialized form contains no phone number (no `+420` substring) and no org name
+  — a row that outlives its org must not carry that org's personal data forward.

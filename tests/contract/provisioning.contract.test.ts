@@ -176,16 +176,36 @@ describe('number provisioning', () => {
     expect(body?.deliverabilityWarning).toBe(true);
   });
 
-  it('number release on account deletion records a lifecycle audit event', async () => {
-    const { cookieHeader, orgId } = await createReadyOrg(ctx.app, ctx.db, ctx.mailbox);
-    const [orgRow] = await ctx.db.select().from(orgs).where(eq(orgs.id, orgId));
+  it(
+    'number release on account deletion records a lifecycle audit event, and the ' +
+      'surviving org_id:null row carries no phone number and no org name',
+    async () => {
+      const { cookieHeader, orgId, businessNumberE164 } = await createReadyOrg(
+        ctx.app,
+        ctx.db,
+        ctx.mailbox,
+      );
+      const [orgRow] = await ctx.db.select().from(orgs).where(eq(orgs.id, orgId));
+      const orgName = orgRow?.name ?? '';
 
-    await postJson(ctx.app, '/api/account/delete', { confirmName: orgRow?.name }, { cookieHeader });
+      await postJson(ctx.app, '/api/account/delete', { confirmName: orgName }, { cookieHeader });
 
-    const events = await ctx.db.select().from(auditEvents);
-    const lifecycleEvent = events.find((e) => e.type === 'number_lifecycle');
-    expect(lifecycleEvent).toBeDefined();
-  });
+      const events = await ctx.db.select().from(auditEvents);
+      const lifecycleEvent = events.find((e) => e.type === 'number_lifecycle');
+      expect(lifecycleEvent).toBeDefined();
+      // It must survive the org's cascading delete (tests/helpers/README.md ambiguity
+      // note), so it cannot carry the org's own FK either.
+      expect(lifecycleEvent?.orgId).toBeNull();
+
+      // No phone number anywhere in the serialized event — not the business number, and
+      // no '+420' substring at all (belt-and-braces: catches any CZ E.164 fragment, not
+      // just this fixture's exact number).
+      const serialized = JSON.stringify(lifecycleEvent ?? {});
+      expect(serialized.includes(businessNumberE164)).toBe(false);
+      expect(serialized.includes('+420')).toBe(false);
+      expect(serialized.includes(orgName)).toBe(false);
+    },
+  );
 
   it('a second active business number for the same org is impossible', async () => {
     const { orgId } = await createReadyOrg(ctx.app, ctx.db, ctx.mailbox);

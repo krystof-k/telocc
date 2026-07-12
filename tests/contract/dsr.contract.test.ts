@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
+  account as accountTable,
+  auditEvents,
   businessNumbers,
+  callSessions,
   calls,
   deletionTombstones,
   endUsers,
@@ -11,12 +14,17 @@ import {
   phoneVerifications,
   regulatoryBundles,
   session as sessionTable,
+  user as userTable,
 } from '@telocc/db';
 import { parseE164 } from '@telocc/telephony';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { setupContractTest } from '../helpers/context.ts';
-import { createEndUserFixture, createReadyOrg } from '../helpers/fixtures.ts';
+import {
+  createCallSessionFixture,
+  createEndUserFixture,
+  createReadyOrg,
+} from '../helpers/fixtures.ts';
 import { getJson, jsonBody, postJson } from '../helpers/http.ts';
 
 /**
@@ -108,8 +116,19 @@ describe('data subject rights: export and erasure', () => {
   });
 
   it('deletion removes every org-scoped row across all tables and the auth user, in one pass', async () => {
-    const { cookieHeader, orgId, userId } = await readyOrgWithData();
+    const { cookieHeader, orgId, userId, businessNumberId } = await readyOrgWithData();
     const [orgRow] = await ctx.db.select().from(orgs).where(eq(orgs.id, orgId));
+
+    // Seed an org-scoped audit event and an in-flight call session directly so the
+    // sweep proves it removes real rows, not just already-empty tables.
+    await ctx.db.insert(auditEvents).values({
+      orgId,
+      actorUserId: userId,
+      type: 'settings_changed',
+      retentionClass: 'security',
+      meta: {},
+    });
+    await createCallSessionFixture(ctx.db, { orgId, businessNumberId });
 
     await postJson(ctx.app, '/api/account/delete', { confirmName: orgRow?.name }, { cookieHeader });
 
@@ -163,6 +182,34 @@ describe('data subject rights: export and erasure', () => {
       .from(sessionTable)
       .where(eq(sessionTable.userId, userId));
     expect(remainingSessions.length, 'session').toBe(0);
+
+    // Better Auth `user` row is gone (design.md §10.3 step 3: Better Auth user + sessions
+    // deleted via the Better Auth API, after the org cascade).
+    const remainingUser = await ctx.db.select().from(userTable).where(eq(userTable.id, userId));
+    expect(remainingUser.length, 'user').toBe(0);
+
+    // Better Auth `account` rows are gone too (cascades from the user delete).
+    const remainingAccounts = await ctx.db
+      .select()
+      .from(accountTable)
+      .where(eq(accountTable.userId, userId));
+    expect(remainingAccounts.length, 'account').toBe(0);
+
+    // Org-scoped audit_events are zero. Filtering on this org's id already excludes
+    // org_id:null lifecycle events (e.g. the number-release event, tests/helpers/README.md)
+    // by construction — those rows can never match `eq(auditEvents.orgId, orgId)`.
+    const remainingOrgAuditEvents = await ctx.db
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.orgId, orgId));
+    expect(remainingOrgAuditEvents.length, 'audit_events (org-scoped)').toBe(0);
+
+    // call_sessions (in-flight working state) are zero.
+    const remainingCallSessions = await ctx.db
+      .select()
+      .from(callSessions)
+      .where(eq(callSessions.orgId, orgId));
+    expect(remainingCallSessions.length, 'call_sessions').toBe(0);
   });
 
   it('deletion calls releaseNumber and deleteCallRecord on the provider for every provider call ref', async () => {

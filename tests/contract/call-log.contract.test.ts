@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { calls } from '@telocc/db';
 import { parseE164 } from '@telocc/telephony';
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { setupContractTest } from '../helpers/context.ts';
 import { createReadyOrg } from '../helpers/fixtures.ts';
@@ -110,22 +112,41 @@ describe('call log', () => {
     expect(outbound?.initiatingUserId).toBe(userId);
   });
 
-  it('there is no API route that updates or deletes an individual call row', async () => {
-    const { cookieHeader } = await readyOrg();
+  it('there is no API route that updates or deletes an individual call row — the real row is provably untouched', async () => {
+    const { cookieHeader, businessNumberE164 } = await readyOrg();
+    const to = parseE164(businessNumberE164);
+    if (!to) throw new Error('bad fixture');
+
+    // Drive a REAL call to a terminal state so the mutation attempt targets the real
+    // row id, not a fabricated/nonexistent one (a route keyed only on "row not found"
+    // would otherwise pass this test for the wrong reason).
+    const callRef = `call_immutable_${randomUUID()}`;
+    await ctx.telco.incomingCall({ callRef, to, from: parseE164('+420602400001') });
+    await ctx.telco.legAnswered({ callRef });
+    await ctx.telco.completed({ callRef, durationSeconds: 12 });
+
+    const [row] = await ctx.db.select().from(calls).where(eq(calls.providerCallRef, callRef));
+    expect(row, 'the terminal call must have produced exactly one calls row').toBeDefined();
+    if (!row) throw new Error('unreachable: asserted above');
+    const before = { ...row };
+
     const putRes = await putJson(
       ctx.app,
-      '/api/calls/00000000-0000-0000-0000-000000000000',
-      {},
+      `/api/calls/${row.id}`,
+      { status: 'missed', durationSeconds: 999 },
       { cookieHeader },
     );
     expect([404, 405]).toContain(putRes.status);
-    const deleteRes = await deleteJson(
-      ctx.app,
-      '/api/calls/00000000-0000-0000-0000-000000000000',
-      undefined,
-      { cookieHeader },
-    );
+
+    const deleteRes = await deleteJson(ctx.app, `/api/calls/${row.id}`, undefined, {
+      cookieHeader,
+    });
     expect([404, 405]).toContain(deleteRes.status);
+
+    // Byte-identical re-read: the attempted mutations must not have touched a single field.
+    const [after] = await ctx.db.select().from(calls).where(eq(calls.id, row.id));
+    expect(after, 'the row must still exist after the attempted mutations').toBeDefined();
+    expect(after).toEqual(before);
   });
 
   it('pagination returns stable cursors and no cross-page duplicates', async () => {

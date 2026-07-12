@@ -97,6 +97,37 @@ describe('rate limits', () => {
     }
   });
 
+  it('PIN-request limits are per-phone: exhausting one phone leaves a second phone unaffected', async () => {
+    const { cookieHeader } = await createReadyOrg(ctx.app, ctx.db, ctx.mailbox, {
+      officeHoursMode: 'always_open',
+    });
+    const phoneA = '+420601100001';
+    const phoneB = '+420601100002';
+
+    let trippedForA = false;
+    for (let i = 0; i < 4; i += 1) {
+      const res = await postJson(
+        ctx.app,
+        '/api/verifications',
+        { phoneE164: phoneA },
+        { cookieHeader },
+      );
+      if (res.status === 429) trippedForA = true;
+    }
+    expect(trippedForA).toBe(true);
+
+    // A second, distinct phone number must be entirely unaffected by phone A's
+    // exhausted counters (its own 60s cooldown / 3-per-10min / 5-per-day limits,
+    // design.md §7).
+    const resForB = await postJson(
+      ctx.app,
+      '/api/verifications',
+      { phoneE164: phoneB },
+      { cookieHeader },
+    );
+    expect(resForB.status).toBeLessThan(300);
+  });
+
   it('invalid webhook signatures increment a counter that trips the alert threshold', async () => {
     const { businessNumberE164 } = await createReadyOrg(ctx.app, ctx.db, ctx.mailbox, {
       officeHoursMode: 'always_open',

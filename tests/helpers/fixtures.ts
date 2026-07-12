@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { Db } from '@telocc/db';
-import { businessNumbers, endUsers, memberships, officeHourRules, orgs } from '@telocc/db';
+import {
+  businessNumbers,
+  callSessions,
+  endUsers,
+  kycDocuments,
+  memberships,
+  officeHourRules,
+  orgs,
+} from '@telocc/db';
 import type { App } from '../../apps/api/src/app.ts';
 import { findUserIdByEmail, loginViaMagicLink } from './auth.ts';
 import type { CaptureMailbox } from './mailbox.ts';
@@ -154,6 +162,61 @@ export async function createEndUserFixture(db: Db, opts: CreateEndUserOptions) {
     })
     .returning();
   if (!row) throw new Error('createEndUserFixture: insert returned no row');
+  return row;
+}
+
+export interface CreateKycDocumentOptions {
+  orgId: string;
+  endUserId: string;
+  type?: string;
+  filename?: string;
+  contentType?: string;
+  bytes?: Buffer;
+}
+
+/** A minimal well-formed `kyc_documents` row — used by cross-org by-id scoping cases. */
+export async function createKycDocumentFixture(db: Db, opts: CreateKycDocumentOptions) {
+  const [row] = await db
+    .insert(kycDocuments)
+    .values({
+      orgId: opts.orgId,
+      endUserId: opts.endUserId,
+      type: opts.type ?? 'business_registration',
+      filename: opts.filename ?? 'registration.pdf',
+      contentType: opts.contentType ?? 'application/pdf',
+      bytes: opts.bytes ?? Buffer.from('%PDF-1.4 fixture content'),
+    })
+    .returning();
+  if (!row) throw new Error('createKycDocumentFixture: insert returned no row');
+  return row;
+}
+
+export interface CreateCallSessionOptions {
+  orgId: string;
+  businessNumberId: string;
+  providerCallRef?: string;
+  kind?: 'inbound' | 'dialin';
+  state?: 'forwarding' | 'collecting' | 'bridging' | 'bridged';
+  fromE164?: string | null;
+}
+
+/**
+ * A minimal in-flight `call_sessions` row — used to prove erasure sweeps actually
+ * remove live session state, not just the append-only `calls` log.
+ */
+export async function createCallSessionFixture(db: Db, opts: CreateCallSessionOptions) {
+  const [row] = await db
+    .insert(callSessions)
+    .values({
+      orgId: opts.orgId,
+      businessNumberId: opts.businessNumberId,
+      providerCallRef: opts.providerCallRef ?? `call_session_fixture_${randomUUID()}`,
+      kind: opts.kind ?? 'inbound',
+      state: opts.state ?? 'forwarding',
+      fromE164: opts.fromE164 ?? null,
+    })
+    .returning();
+  if (!row) throw new Error('createCallSessionFixture: insert returned no row');
   return row;
 }
 

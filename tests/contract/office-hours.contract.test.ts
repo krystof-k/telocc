@@ -2,6 +2,7 @@ import { parseE164 } from '@telocc/telephony';
 import { describe, expect, it } from 'vitest';
 import { setupContractTest } from '../helpers/context.ts';
 import { createReadyOrg, STANDARD_WEEKDAY_9_TO_17 } from '../helpers/fixtures.ts';
+import { getJson, jsonBody, putJson } from '../helpers/http.ts';
 
 /**
  * office-hours.contract.test.ts — the routing matrix (ER-CLI-2b, design.md §8).
@@ -128,5 +129,119 @@ describe('office hours routing matrix', () => {
     if (res.instruction?.kind === 'reject') {
       expect(res.instruction.cause).toBe('busy');
     }
+  });
+
+  /**
+   * These cases drive the REAL `PUT /api/office-hours` route (design.md §7) rather than
+   * seeding rules directly in the DB, and confirm the change actually reaches routing
+   * decisions on a real inbound call. They are red until M5 lands the route — that is
+   * expected/correct per the finding; M5's verify command
+   * (`pnpm vitest run tests/contract/office-hours.contract.test.ts ...`) is file-level
+   * with no `-t` filter, so these cases are already selected by that gate without any
+   * milestones.md change.
+   */
+  describe('PUT /api/office-hours (real route)', () => {
+    it(
+      'setting weekly rules via HTTP changes real routing: a subsequent inbound call ' +
+        'is forwarded in-hours and declined busy out-of-hours after the change',
+      async () => {
+        const { cookieHeader, businessNumberE164 } = await createReadyOrg(
+          ctx.app,
+          ctx.db,
+          ctx.mailbox,
+          { officeHoursMode: 'schedule', timezone: 'Europe/Prague', officeHourRules: [] },
+        );
+
+        const putRes = await putJson(
+          ctx.app,
+          '/api/office-hours',
+          {
+            mode: 'schedule',
+            timezone: 'Europe/Prague',
+            rules: [{ weekday: 0, opensAt: '09:00', closesAt: '17:00' }],
+          },
+          { cookieHeader },
+        );
+        expect(putRes.status).toBeLessThan(300);
+
+        const getRes = await getJson(ctx.app, '/api/office-hours', { cookieHeader });
+        expect(getRes.status).toBe(200);
+        const body = await jsonBody<{ mode: string; rules: { weekday: number }[] }>(getRes);
+        expect(body?.mode).toBe('schedule');
+        expect(body?.rules?.some((r) => r.weekday === 0)).toBe(true);
+
+        // 08:30 UTC = 09:30 local (Monday 2026-01-12, CET winter) — in hours, forwarded.
+        const inHours = await callAt(businessNumberE164, '2026-01-12T08:30:00.000Z');
+        expect(inHours.instruction?.kind).toBe('forward');
+
+        // 18:00 UTC = 19:00 local — after the (newly set) 17:00 close, declined busy.
+        const outOfHours = await callAt(businessNumberE164, '2026-01-12T18:00:00.000Z');
+        expect(outOfHours.instruction?.kind).toBe('reject');
+      },
+    );
+
+    it('opens>=closes in a rule is rejected with 400', async () => {
+      const { cookieHeader } = await createReadyOrg(ctx.app, ctx.db, ctx.mailbox);
+      const res = await putJson(
+        ctx.app,
+        '/api/office-hours',
+        {
+          mode: 'schedule',
+          timezone: 'Europe/Prague',
+          rules: [{ weekday: 0, opensAt: '17:00', closesAt: '09:00' }],
+        },
+        { cookieHeader },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it('a duplicate weekday across rules is rejected with 400', async () => {
+      const { cookieHeader } = await createReadyOrg(ctx.app, ctx.db, ctx.mailbox);
+      const res = await putJson(
+        ctx.app,
+        '/api/office-hours',
+        {
+          mode: 'schedule',
+          timezone: 'Europe/Prague',
+          rules: [
+            { weekday: 0, opensAt: '09:00', closesAt: '17:00' },
+            { weekday: 0, opensAt: '10:00', closesAt: '18:00' },
+          ],
+        },
+        { cookieHeader },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it('a non-IANA timezone string is rejected with 400', async () => {
+      const { cookieHeader } = await createReadyOrg(ctx.app, ctx.db, ctx.mailbox);
+      const res = await putJson(
+        ctx.app,
+        '/api/office-hours',
+        {
+          mode: 'schedule',
+          timezone: 'Not/A_Real_Zone',
+          rules: [{ weekday: 0, opensAt: '09:00', closesAt: '17:00' }],
+        },
+        { cookieHeader },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it('more than 7 rules is rejected with 400', async () => {
+      const { cookieHeader } = await createReadyOrg(ctx.app, ctx.db, ctx.mailbox);
+      const rules = Array.from({ length: 8 }, (_, i) => ({
+        weekday: i % 7,
+        opensAt: '09:00',
+        closesAt: '17:00',
+      }));
+      const res = await putJson(
+        ctx.app,
+        '/api/office-hours',
+        { mode: 'schedule', timezone: 'Europe/Prague', rules },
+        { cookieHeader },
+      );
+      expect(res.status).toBe(400);
+    });
   });
 });
