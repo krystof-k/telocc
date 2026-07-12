@@ -109,6 +109,7 @@ Every variable `apps/api/src/env.ts` reads, where it's set, and who supplies the
 | `TWILIO_REGION` | var | `wrangler.jsonc` `vars` (already `"ie1"`) | no | ER-RES-3; only `ie1` is supported by this build |
 | `TWILIO_ACCOUNT_SID` | secret | `wrangler secret put TWILIO_ACCOUNT_SID` | **yes** — set only at §8 (the flip) | Twilio credential |
 | `TWILIO_AUTH_TOKEN` | secret | `wrangler secret put TWILIO_AUTH_TOKEN` | **yes** — set only at §8 | Twilio credential (also verifies `X-Twilio-Signature`) |
+| `TWILIO_SMS_FROM` | secret | `wrangler secret put TWILIO_SMS_FROM` | **yes** — set only at §8 (a Twilio-owned E.164 SMS sender) | SMS-PIN sender number; required (boot-guarded) once `TELEPHONY_PROVIDER=twilio` |
 | `EMAIL_PROVIDER` | var | `wrangler.jsonc` `vars` (unset → defaults to `"dev"`; add `"resend"` at §7) | no default needed for first deploy; **yes** at §7 | selects the `EmailSender` |
 | `RESEND_API_KEY` | secret | `wrangler secret put RESEND_API_KEY` | **yes** — set at §7 | Resend API key (required once `EMAIL_PROVIDER=resend`) |
 | `RETENTION_CALL_LOG_MONTHS` | var | `wrangler.jsonc` `vars` (already `"13"`) | no for the default; **yes** if you sign off on a different window (OWN-6, `docs/runbook.md`) | ER-RET-1 |
@@ -249,48 +250,13 @@ executed:
 
 This is the one section of this guide gated on you actually having a Twilio account,
 credentials, and (eventually) a purchased number — per `docs/brief.md`'s goal, this and a
-purchased number are the *only* things meant to stand between this build and live calls.
-One piece of engineering plumbing is not yet wired for you (step 0 below) — everything after
-it is configuration and owner action.
-
-### Step 0 — wire the Twilio provider into the composition point (one-time code change)
-
-`packages/telephony/src/twilio/**` (M9) is a **complete** `TwilioProvider` implementation
-against the frozen seam interface — signature verification, TwiML rendering, REST request
-builders, capability flags — but `apps/api/src/deps.ts`'s `buildProvider()` only constructs
-it for `TELEPHONY_PROVIDER=mock` today; any other value (including `twilio`) falls back to a
-placeholder that throws on every call, by design (`deps.ts`: *"twilio stays unwired... that
-wiring is a go-live step"*). Before setting `TELEPHONY_PROVIDER=twilio` for real, add the
-Twilio branch:
-
-```ts
-// apps/api/src/deps.ts
-import { TwilioProvider } from '@telocc/telephony/twilio';
-// ...
-function buildProvider(env: Env, now: () => Date): TelephonyProvider {
-  if (env.TELEPHONY_PROVIDER === 'mock') {
-    return createMockProvider({ webhookSecret: env.MOCK_WEBHOOK_SECRET, now }).provider;
-  }
-  if (env.TELEPHONY_PROVIDER === 'twilio') {
-    return new TwilioProvider({
-      accountSid: env.TWILIO_ACCOUNT_SID!,       // present — env.ts should gain a
-      authToken: env.TWILIO_AUTH_TOKEN!,         // superRefine check requiring both
-      region: 'ie1',                             // when TELEPHONY_PROVIDER=twilio, the
-      appBaseUrl: env.APP_BASE_URL,               // same shape as the existing production
-      smsFrom: env.TWILIO_SMS_FROM!,             // boot guards in env.ts §2.
-    });
-  }
-  return notImplementedProvider;
-}
-```
-
-This is mechanical composition, not new logic — `TwilioProvider`'s 85 in-package tests
-(M9) already cover its behaviour. Note `smsFrom` (`TwilioProviderConfig`, see
-`packages/telephony/src/twilio/config.ts`) has no corresponding `env.ts` variable yet
-(`TWILIO_SMS_FROM` or similar must be added there too — a required Twilio-owned E.164
-sender number, separate from any org's business number since verification can run before
-a business number exists). This gap and the missing `buildProvider` branch are recorded in
-`docs/decisions.md`.
+purchased number are the *only* things standing between this build and live calls. No code
+changes are required: `apps/api/src/deps.ts` constructs the real `TwilioProvider` whenever
+`TELEPHONY_PROVIDER=twilio`, and `env.ts` refuses to boot in that mode unless
+`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_SMS_FROM` are all set (the same
+boot-guard pattern as the EU-database check). `TWILIO_SMS_FROM` is a Twilio-owned E.164
+sender number for SMS-PIN delivery — deliberately separate from any org's business number,
+since verification can run before a business number exists.
 
 ### Step 1 — Twilio account, region, credentials
 

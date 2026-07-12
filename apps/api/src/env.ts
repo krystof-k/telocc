@@ -15,7 +15,8 @@ const envSchema = z
     MOCK_WEBHOOK_SECRET: z.string().default('dev-mock-webhook-secret-change-me'),
     TWILIO_ACCOUNT_SID: z.string().optional(),
     TWILIO_AUTH_TOKEN: z.string().optional(),
-    TWILIO_REGION: z.string().default('ie1'),
+    TWILIO_REGION: z.literal('ie1').default('ie1'),
+    TWILIO_SMS_FROM: z.string().optional(),
     EMAIL_PROVIDER: z.enum(['dev', 'resend']).default('dev'),
     RESEND_API_KEY: z.string().optional(),
     RETENTION_CALL_LOG_MONTHS: z.coerce.number().int().positive().default(13),
@@ -29,6 +30,20 @@ const envSchema = z
     APPSIGNAL_PUSH_API_KEY: z.string().optional(),
   })
   .superRefine((env, ctx) => {
+    // TELEPHONY_PROVIDER=twilio needs its full credential set in every environment —
+    // deps.ts constructs the provider at boot, so fail here with a precise message.
+    if (env.TELEPHONY_PROVIDER === 'twilio') {
+      for (const key of ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_SMS_FROM'] as const) {
+        if (!env[key]) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: `TELEPHONY_PROVIDER=twilio requires ${key} (docs/deploy.md "mock -> Twilio flip")`,
+          });
+        }
+      }
+    }
+
     if (env.APP_ENV !== 'production') return;
 
     // ER-RES-1: Neon project region is immutable — refuse to boot against a

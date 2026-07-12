@@ -353,3 +353,9 @@ One-liners for every choice the brief left open. Newest at the bottom.
     `TWILIO_SMS_FROM`) is a prerequisite for writing #65's `buildProvider` twilio branch;
     noted in `docs/deploy.md` §10 step 0 rather than added to `env.ts` here, since that
     file is outside M11's scope.
+67. **#65/#66 closed by the orchestrator:** `deps.ts` now constructs `TwilioProvider` for
+    `TELEPHONY_PROVIDER=twilio` (mechanical composition; M9's tests cover behaviour),
+    `env.ts` gained `TWILIO_SMS_FROM` plus a boot guard requiring all three TWILIO_*
+    values in twilio mode, and deploy.md's "step 0 code change" section was replaced by
+    configuration-only instructions — the brief's "only credentials and a number stand
+    between this and live calls" now holds literally.

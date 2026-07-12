@@ -114,7 +114,14 @@ export function requestMagicLink(email: string): Promise<void> {
 }
 
 export async function signOut(): Promise<void> {
-  await fetch('/api/auth/sign-out', { method: 'POST', credentials: 'same-origin' });
+  // Better Auth's sign-out endpoint rejects body-less posts with 415.
+  const res = await fetch('/api/auth/sign-out', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  });
+  if (!res.ok) throw new Error(`sign-out failed: ${res.status}`);
 }
 
 // ---- orgs ----

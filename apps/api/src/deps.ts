@@ -1,6 +1,7 @@
 import type { Db } from '@telocc/db';
 import type { TelephonyProvider } from '@telocc/telephony';
 import { createMockProvider, type MockProviderState } from '@telocc/telephony/mock';
+import { TwilioProvider } from '@telocc/telephony/twilio';
 import type { Env } from './env.ts';
 import { createDevEmailSender, createResendEmailSender, type EmailSender } from './lib/email.ts';
 
@@ -89,6 +90,21 @@ function buildProvider(
   if (env.TELEPHONY_PROVIDER === 'mock') {
     const instance = createMockProvider({ webhookSecret: env.MOCK_WEBHOOK_SECRET, now });
     return { provider: instance.provider, mockProviderState: instance.state };
+  }
+  if (env.TELEPHONY_PROVIDER === 'twilio') {
+    // env.ts's superRefine guarantees these are set when the provider is 'twilio'.
+    if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN || !env.TWILIO_SMS_FROM) {
+      throw new Error('TELEPHONY_PROVIDER=twilio requires TWILIO_* credentials (env.ts)');
+    }
+    return {
+      provider: new TwilioProvider({
+        accountSid: env.TWILIO_ACCOUNT_SID,
+        authToken: env.TWILIO_AUTH_TOKEN,
+        region: env.TWILIO_REGION,
+        appBaseUrl: env.APP_BASE_URL,
+        smsFrom: env.TWILIO_SMS_FROM,
+      }),
+    };
   }
   return { provider: notImplementedProvider };
 }

@@ -17,9 +17,14 @@ export function AppShell() {
   const queryClient = useQueryClient();
 
   async function handleSignOut() {
-    await signOut();
-    queryClient.clear();
-    navigate('/login', { replace: true });
+    try {
+      await signOut();
+    } finally {
+      // Even if the server call fails, drop client state and return to login —
+      // the session cookie is httpOnly, so the next guarded request re-checks it.
+      queryClient.clear();
+      navigate('/login', { replace: true });
+    }
   }
 
   return (

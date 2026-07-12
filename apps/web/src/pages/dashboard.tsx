@@ -157,7 +157,7 @@ export function DashboardPage() {
       </Card>
 
       {me.data?.org && (
-        <p className="text-xs text-neutral-400">
+        <p className="text-xs text-neutral-600">
           {me.data.org.name} · {t('common.appName')}
         </p>
       )}
