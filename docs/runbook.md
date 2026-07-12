@@ -1,10 +1,10 @@
 # Telocc — Operations Runbook
 
-> **DRAFT — requires legal/owner review of the breach-response and go-live sections
-> (see `docs/compliance/register.md` OWN-8, and the go-live items OWN-4/7/9/10 below).**
+> **DRAFT — requires legal/owner review of the breach-response section and the owner
+> sign-offs listed in the go-live gates table below.**
 > Assembled from `docs/compliance/register.md` (items 13, 21) and ER-POL-4
-> (`docs/compliance/engineering-requirements.md`). The **go-live gates** section is
-> completed in M11 (`docs/deploy.md`'s companion); this milestone (M8) ships the
+> (`docs/compliance/engineering-requirements.md`). The **go-live gates** section was
+> completed in M11 (`docs/deploy.md`'s companion); this milestone (M8) shipped the
 > incident-response path and the anomaly/abuse response procedure that the retention
 > job's anomaly scan (§9.9, `packages/core/src/retention.ts`) feeds into.
 
@@ -111,19 +111,37 @@ When the daily scheduled job (`packages/core/src/retention.ts`) writes an
 
 ## Go-live gates
 
-*Completed in M11 (`docs/deploy.md`'s companion checklist) — this section will list,
-with their ER/OWN references, every item that must be true before flipping to a live
-Twilio account: Twilio credentials + IE1 region + regulatory bundle document list
-(OWN-10), written CZ-domestic-termination confirmation before setting
-`czCliDomesticTermination: true` (ER-OBS-1/OWN-4), Voice Geographic Permissions
-(ER-EMG-2), email provider account, vendor DPAs + transfer-register rows (OWN-7),
-Cloudflare Regional Services decision (OWN-7), retention-window sign-off (OWN-6),
-legal-text sign-off (OWN-8), and *identifikovaná osoba* VAT registration after the
-first Twilio invoice (OWN-9). None of these block anything built so far — the system is
-fully buildable and demoable against the mock provider.*
+Every row below is an item only the owner (with counsel/accountant/vendor where noted) can
+close — engineering has built everything that can be built ahead of it. None of these block
+anything already shipped: the system is fully buildable and demoable against the mock
+provider today, per `docs/brief.md`'s goal. This checklist is the owner-facing companion to
+`docs/deploy.md` §10 (the mock→Twilio flip); each row cites the exact register item(s) it
+closes (`docs/compliance/register.md`) and the concrete artifact that closes it. Every
+numbered item from that register's "Open items needing the owner" table appears in exactly
+one row below.
+
+| # | Gate | ER/OWN reference | Concrete artifact that closes it |
+|---|---|---|---|
+| 1 | **Regulatory posture decision** — pick posture A (notify ČTÚ, operate as NB-ICS provider) or posture B (application layer over Twilio, the brief's default) | OWN-1 | A written counsel opinion or a documented informal ČTÚ inquiry response, filed under `docs/compliance/`; if posture flips to A, the drafted `docs/compliance/ctu-notification-pack.md` is filed with ČTÚ (currently drafted, not filed) |
+| 2 | **Emergency-calling posture confirmation** — confirm "block emergency numbers + prominent disclosure" is a lawful stance under the chosen posture | OWN-2 | Counsel/ČTÚ written confirmation, filed alongside item 1's opinion; no code change either way (ER-EMG-1..3 are already built to the "block + disclose" stance) |
+| 3 | **Lawful CLI presentation confirmation** — confirm VO-S/2/04.2024-1 permits Telocc's CLI-insertion pattern (a bridging service inserting the org's own hosted number) | OWN-3 | CZ telecom counsel's written confirmation, filed under `docs/compliance/` |
+| 4 | **Twilio account, IE1 region, credentials** — create the account and generate API credentials | — (`docs/brief.md` GOAL: "my provider credentials") | `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN` set via `wrangler secret put` (`docs/deploy.md` §10 step 1) |
+| 5 | **Twilio wiring confirmations** — confirm the exact CZ regulatory-bundle document list, whether Telocc or the customer org is the regulatory end user, and which entity is the ČTÚ-registered carrier of record | OWN-10 | `GET /api/kyc/requirements` response captured against a live Twilio account, plus a Twilio support-ticket confirmation of the end-user/carrier-of-record questions, both filed under `docs/compliance/` |
+| 6 | **Number-class product decision** — confirm geographic vs. `nomadic_910` vs. mobile is the right fit given the international-arrival CLI-blocking risk (register item 10) | OWN-5 | A recorded decision in `docs/decisions.md` (default remains `geographic` unless changed) and the corresponding `numberClass` used at provisioning (`docs/deploy.md` §10 step 2) |
+| 7 | **CZ→CZ deliverability gate** — obtain Twilio's written confirmation that CZ-bound +420-CLI legs terminate via domestic Czech interconnection | OWN-4 / ER-OBS-1 | Twilio's written confirmation on file, followed by flipping `czCliDomesticTermination` from `'unverified'` to `true` in `packages/telephony/src/twilio/provider.ts`'s `TWILIO_CAPABILITIES` constant (`docs/deploy.md` §10 step 5) — a reviewable, one-line diff |
+| 8 | **Voice Geographic Permissions** — restrict Twilio's Voice Dialing Geographic Permissions to deny high-risk/premium-rate destination ranges, mirroring the app's own `dial_policy_prefixes` deny-list at the carrier layer | ER-EMG-2 | Geographic Permissions configuration saved in the Twilio console (Twilio account setting, no repo artifact) |
+| 9 | **Business number purchased** | — (`docs/brief.md` GOAL: "a purchased number") | A `business_numbers` row in `status = 'active'` for the org, provisioned through `POST /api/numbers/provision` against the live Twilio account |
+| 10 | **B2B gating confirmation** — confirm signup stays explicitly B2B (business-capacity declaration now, IČO field once CZ billing lands), keeping the EAA-consumer and § 419 consumer-status arguments out of scope | OWN-11 | A recorded owner sign-off in `docs/decisions.md` confirming no consumer-facing signup path will be added |
+| 11 | **Email provider account** — create the production transactional-email account (Resend, or an alternative behind the same `EmailSender` port) | ER-POL-5 | Account created, `RESEND_API_KEY` set via `wrangler secret put`, `EMAIL_PROVIDER=resend` set in `wrangler.jsonc`'s `vars`, and a completed row in `docs/compliance/transfer-register.md` (`docs/deploy.md` §9) |
+| 12 | **Vendor DPAs, Twilio IE1 selection, and Cloudflare Regional Services decision** — execute/accept the Twilio, Cloudflare, and Neon DPAs; select Twilio's IE1 region; decide whether to purchase Cloudflare Regional Services (EU) on the custom domain or accept transient non-EU edge processing under the Cloudflare DPA+DPF | OWN-7 | Executed DPAs on file; completed rows (replacing every `[OWNER TO CONFIRM/DECIDE]` placeholder) in `docs/compliance/transfer-register.md` |
+| 13 | **Call-log retention window sign-off** — confirm the call-log retention/anonymisation window | OWN-6 / ER-RET-1 | A recorded owner sign-off in `docs/decisions.md` (default: 13 months, `RETENTION_CALL_LOG_MONTHS`) and the matching value reflected in `docs/legal/privacy-notice.md` once it is itself signed off (item 14) |
+| 14 | **Legal sign-off on all drafted texts** — privacy notice, ToS (incl. Art 28 DPA terms, AUP with the § 96 telemarketing warning, emergency-limitation disclosure, port-out clause, OKU placeholder), and the § 63a micro/small-enterprise waiver approach | OWN-8 | Counsel-reviewed, approved copies of `docs/legal/{privacy-notice,tos,dpa,aup}.md` with their `DRAFT` status lifted and a sign-off date recorded |
+| 15 | **VAT / accountant registration** — register as *identifikovaná osoba* (or voluntary plátce) within 15 days of the first cross-border Twilio invoice; at billing launch, confirm telecom-vs-e-service VAT classification and plátce/OSS registrations | OWN-9 | Filed *identifikovaná osoba* registration (or plátce registration) confirmation from the accountant, plus the DIČ given to Twilio for reverse-charge invoicing |
+| 16 | **Legal watch list acknowledgement** — acknowledge the standing watch items: the EU–US DPF appeal (CJEU C-703/25 P), stability of the mobile-CLI blocking exemption, and the growth tripwires (≥10 staff/€2M → EAA; ≥50 staff/€10M → eIDAS 5f; first paid invoice → VAT; any consumer plan → EAA + consumer law; any AI feature → AI Act) | OWN-12 | A dated acknowledgement note in `docs/decisions.md` that these are being tracked, revisited on any tripwire |
+| 17 | **Pre-launch primary-source re-verification** — re-verify verbatim the egress-blocked primary sources listed in the register's methodology caveat (VO-S/2/04.2024-1, ZEK §§ 33/63/63a/63b/88–92/96/97, vyhláška 117/2007 Sb., the NS judgment of 30 Dec 2025, Act 424/2023 Sb., and the live Twilio CZ regulatory/voice guideline pages) before relying on any of the above as settled | OWN-13 | A dated re-verification note (counsel or owner) covering each listed source, filed under `docs/compliance/` |
 
 ---
 
-*Last drafted: 2026-07-12 (M8). Go-live gates section pending M11. Breach-response
-templates and sub-processor contacts pending owner/legal completion
-(`docs/compliance/register.md` OWN-7/8).*
+*Last drafted: 2026-07-12 (M8); go-live gates completed 2026-07-12 (M11). Breach-response
+templates and sub-processor contacts remain pending owner/legal completion — see items 12
+and 14 in the table above for the corresponding vendor-DPA and legal-sign-off gates.*

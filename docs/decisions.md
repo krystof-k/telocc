@@ -326,3 +326,30 @@ One-liners for every choice the brief left open. Newest at the bottom.
     `allowPositionals: true`, throws `ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL` on the first flag
     after it. Filtering out any `--` token keeps both that invocation and a direct `tsx
     scripts/esd-report.ts --year 2026 --half 1` call working identically.
+64. **M11 adds `compatibility_flags: ["nodejs_compat"]` to `apps/api/wrangler.jsonc`,
+    correcting #28's "no compatibility flag needed" claim:** #28 and design.md §1/§13 held
+    on the premise that only the per-entry DB driver split mattered for Workers-bundle
+    safety. Since M0, `packages/core/src/verification.ts`, `apps/api/src/lib/auth.ts`,
+    `apps/api/src/routes/webhooks.ts`, and `apps/api/src/middleware/rate-limit.ts` all began
+    importing `node:crypto` (HMAC/hash for PIN, magic-link, webhook, and rate-limit keys),
+    and Better Auth's own dependency tree imports `node:async_hooks` — `wrangler deploy
+    --dry-run` only ever *warned* about this (exit code 0), never failing the milestone
+    gates that ran it, so the drift went unnoticed until M11's review. Without the flag,
+    auth, webhooks, and rate limiting — i.e. most of the app — would throw at request time
+    on real Workers despite a green dry run. The flag is free at this
+    `compatibility_date` (no other behavioural change); re-running `wrangler deploy
+    --dry-run` afterward confirms both the gate stays green and the warnings disappear.
+65. **`apps/api/src/deps.ts`'s `buildProvider()` still has no `twilio` branch — an M11
+    finding, deliberately not fixed here** (`deps.ts` is outside M11's file set):
+    `TELEPHONY_PROVIDER=twilio` currently falls back to `notImplementedProvider`, which
+    throws on every seam call. `docs/deploy.md` §10 step 0 documents the exact
+    composition-point change required (construct `TwilioProvider` from
+    `@telocc/telephony/twilio`) as a mandatory prerequisite before ever setting that env
+    var for real — flagged for whoever executes the mock→Twilio flip.
+66. **`TwilioProviderConfig.smsFrom` (`packages/telephony/src/twilio/config.ts`) has no
+    corresponding `apps/api/src/env.ts` variable yet:** a Twilio-owned E.164 sender number
+    for SMS-PIN delivery, deliberately distinct from any org's business number (design.md
+    §6: verification can run before a business number exists). Adding it (e.g.
+    `TWILIO_SMS_FROM`) is a prerequisite for writing #65's `buildProvider` twilio branch;
+    noted in `docs/deploy.md` §10 step 0 rather than added to `env.ts` here, since that
+    file is outside M11's scope.
