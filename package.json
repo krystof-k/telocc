@@ -11,7 +11,7 @@
     "demo": "node scripts/demo.mjs",
     "build": "pnpm --filter web build",
     "test": "vitest run",
-    "test:contract": "vitest run tests/contract",
+    "test:contract": "vitest run --project contract",
     "typecheck": "tsc --noEmit -p tsconfig.json && pnpm -r --workspace-concurrency=1 run typecheck",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -20,11 +20,13 @@
   "dependencies": {
     "@telocc/core": "workspace:*",
     "@telocc/db": "workspace:*",
+    "@telocc/telephony": "workspace:*",
     "dotenv": "17.4.2"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
     "@types/node": "26.1.1",
+    "drizzle-orm": "0.45.2",
     "tsx": "4.23.0",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
