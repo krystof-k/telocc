@@ -134,3 +134,50 @@ One-liners for every choice the brief left open. Newest at the bottom.
     still goes through i18n (design.md §11) without widening core's dependency surface. The same
     module's `confirmPhoneVerification` takes a narrower `BaseVerificationDeps` (`db`/`now`/
     `pepper`, no `sendSms`/`renderSmsBody`) since confirmation never sends anything.
+44. **M4 webhook route implements a minimal inline inbound (customer → business number) flow**
+    (office-hours + verified-number gating, `call_sessions` bookkeeping, `call.completed`
+    finalization per design.md §5.0) directly in `apps/api/src/routes/webhooks.ts`, rather than
+    waiting on `core/routing/inbound.ts`/`core/office-hours.ts`/`core/call-log.ts` — those remain
+    M5/M6 stubs and are outside M4's file list. It never creates a `dialin`-kind `call_sessions`
+    row (that entry condition is M6's dial-policy/dialin machine), so `call.dtmf` is always
+    acked-and-ignored under this milestone. M5/M6 will likely refactor this file to delegate to
+    their state machines once those land.
+45. **`provisioning.update` webhook resolves a `business_numbers`/bundle row by a `number_<id>` /
+    `bundle_<id>` fallback** when the stored `provider_number_ref`/bundle ref is `NULL` (e.g. a
+    fixture-seeded number that never went through `provisionNumber`) — `provisioning.contract.
+    test.ts`'s "rejected bundle" case sends exactly this `numberRef` shape when the fixture number
+    has no stored ref, so this fallback is required for that case to resolve at all, not just a
+    convenience.
+46. **`packages/telephony/src/mock/{provider,telco}.ts` use Web Crypto (`crypto.subtle`), not
+    `node:crypto`** — same Workers-bundle-safety rationale already applied to
+    `twilio/signature.ts` (design.md "Runtime duality", §1); `packages/telephony`'s tsconfig has
+    no Node types, so `node:crypto`/`Buffer` do not typecheck there regardless of runtime target.
+47. **`/dev/sim/*` drives `MockTelco` against a standalone instance of `webhooksRoutes(deps)`**
+    (constructed fresh inside `devRoutes(deps)`), not a circular reference to the fully-assembled
+    top-level app — the top-level app does not exist yet at the point `deps`/`devRoutes` are
+    built, and Hono sub-apps are independently `.request()`-able, so this still exercises the
+    exact same signature-verification/parse/route code the mounted `/webhooks` router uses
+    (decisions.md #21's "always enters through the real signed webhook endpoint").
+48. **Invalid-webhook-signature alert threshold = 10 per 10-minute window** (`apps/api/src/
+    routes/webhooks.ts`): design.md names no concrete number (only the unrelated nightly
+    `ANOMALY_*` thresholds), and rate-limits.contract.test.ts's own header comment calls the
+    exact value "an M4/M8 implementation decision" — the counter is a fixed-window row in
+    `rate_limit_counters` (scope `webhook_invalid_signature`, a constant "global" identifier,
+    since the payload isn't yet trustworthy pre-verification) written on every `verifyWebhook`
+    failure; `anomaly_flagged` fires once when the count first crosses the threshold
+    (decisions.md #39).
+49. **Discovered defect in `provisioning.contract.test.ts`'s own local `ownerWithoutKyc()`
+    helper** (not a file this milestone may edit — testing.md: contract-test fixes go through
+    the architect/orchestrator): it logs in and creates an org row via `createOrgFixture`, but
+    never creates the matching `memberships` row, so every subsequent API call made with its
+    `cookieHeader` hits `requireOrg` and 403s with `no_org` before reaching any KYC/catalog/
+    provisioning logic — regardless of what those routes do. Confirmed by re-running the exact
+    same steps with a `createMembershipFixture(...)` call added: `PUT /api/kyc`, `GET /api/
+    numbers/catalog`, `POST /api/numbers/provision`, and `GET /api/business-number` all then
+    behave exactly as the three affected test cases ("the catalog returns only numbers…", "KYC
+    rejects a PO-box…", "the mock auto-approves…") expect. This affects 3 of
+    `provisioning.contract.test.ts`'s 9 cases; a 4th ("number release on account deletion…")
+    separately depends on `POST /api/account/delete`, which is M8's `routes/dsr.ts` (unmounted
+    until M8 lands) — `packages/core/src/repos/numbers.ts::releaseOrgBusinessNumbers` is added
+    now as the ready-to-call, PII-free (`org_id: null`, last-4-only meta) helper M8's route
+    should use.

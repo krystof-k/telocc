@@ -7,6 +7,7 @@ import { findUserIdByEmail, loginViaMagicLink } from '../helpers/auth.ts';
 import { setupContractTest } from '../helpers/context.ts';
 import {
   createBusinessNumberFixture,
+  createMembershipFixture,
   createOrgFixture,
   createReadyOrg,
 } from '../helpers/fixtures.ts';
@@ -29,6 +30,7 @@ describe('number provisioning', () => {
     const { cookieHeader } = await loginViaMagicLink(ctx.app, ctx.mailbox, email);
     const userId = await findUserIdByEmail(ctx.db, email);
     const org = await createOrgFixture(ctx.db);
+    await createMembershipFixture(ctx.db, { orgId: org.id, userId });
     return { cookieHeader, userId, orgId: org.id };
   }
 
