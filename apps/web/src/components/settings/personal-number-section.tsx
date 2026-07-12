@@ -11,10 +11,10 @@ const E164_PATTERN = /^\+[1-9][0-9]{1,14}$/;
 
 /**
  * Personal-number (re-)verification (design.md §11 settings: "personal number +
- * re-verify flow with emergency disclosure"). There is no API route that returns the
- * currently-verified number/timestamp (see `lib/api.ts`'s header comment), so this
- * section can't show current status — it always offers the issue→confirm flow, which
- * is safe to run again even for an already-verified number.
+ * re-verify flow with emergency disclosure"). The current verified number/status is
+ * shown by `AccountSection` (from `GET /api/me`); this section always offers the
+ * issue→confirm flow, which is safe to run again even for an already-verified number
+ * — that's how changing the number works too.
  */
 export function PersonalNumberSection() {
   const [phone, setPhone] = useState('');

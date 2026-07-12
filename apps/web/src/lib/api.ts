@@ -83,9 +83,12 @@ function putJson<T>(path: string, json: unknown): Promise<T> {
 // ---- me / session ----
 
 export interface MeResponse {
-  user: { id: string };
+  user: { id: string; email: string | null };
   org: OrgDto | null;
   orgId: string | null;
+  personalNumberE164: string | null;
+  personalNumberVerifiedAt: string | null;
+  emergencyAckAt: string | null;
 }
 
 export interface OrgDto {

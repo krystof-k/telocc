@@ -152,8 +152,13 @@ export const en = {
     exportData: 'Export my data',
     deleteAccount: 'Delete account',
     accountTitle: 'Account',
+    accountEmailLabel: 'Login email',
     accountOrgName: 'Organisation name',
     accountSaved: 'Saved.',
+    accountPersonalNumberLabel: 'Verified personal number',
+    accountPersonalNumberNone: 'No personal number verified yet.',
+    accountPersonalNumberVerified: 'Verified',
+    accountEmergencyAckLabel: 'Emergency-number disclosure acknowledged',
     personalNumberTitle: 'Personal number',
     personalNumberBody:
       'Verify or update the personal phone that receives forwarded calls when you are unavailable on your business number.',

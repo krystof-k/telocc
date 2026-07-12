@@ -18,7 +18,13 @@ export function SettingsPage() {
   return (
     <div className="flex flex-col gap-6">
       <h1 className="text-2xl font-semibold">{t('settings.title')}</h1>
-      <AccountSection org={me.data.org} />
+      <AccountSection
+        org={me.data.org}
+        email={me.data.user.email}
+        personalNumberE164={me.data.personalNumberE164}
+        personalNumberVerifiedAt={me.data.personalNumberVerifiedAt}
+        emergencyAckAt={me.data.emergencyAckAt}
+      />
       <PersonalNumberSection />
       <OfficeHoursSection />
       <BusinessNumberSection businessNumber={businessNumber.data ?? null} />
