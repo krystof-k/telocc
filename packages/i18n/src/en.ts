@@ -32,6 +32,8 @@ export const en = {
     sendPin: 'Send verification code',
     enterPin: 'Enter the 6-digit code',
     confirm: 'Confirm',
+    smsCodeIntro: 'Your Telocc verification code is',
+    smsExpiryNotice: 'This code expires in 10 minutes. Do not share it with anyone.',
   },
   calls: {
     title: 'Call log',

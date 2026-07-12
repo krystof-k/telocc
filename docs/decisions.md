@@ -126,3 +126,11 @@ One-liners for every choice the brief left open. Newest at the bottom.
     verification row for the same email before issuing a new one. In production `deps.now` is the
     real clock, so this is simply a second, consistent way of tracking the same thing — no
     behavioural difference from relying on Better Auth alone.
+43. **`core/verification.ts` never imports `@telocc/i18n` directly:** design.md §1 states core
+    depends only on `db` + `telephony` (types only); `issuePhoneVerification` instead takes an
+    injected `renderSmsBody(pin): string` callback, and `apps/api/src/routes/verifications.ts`
+    (which already depends on `@telocc/i18n`, same as `lib/auth.ts`) supplies it by composing
+    the new `verification.smsCodeIntro`/`smsExpiryNotice` en.ts keys around the PIN — SMS copy
+    still goes through i18n (design.md §11) without widening core's dependency surface. The same
+    module's `confirmPhoneVerification` takes a narrower `BaseVerificationDeps` (`db`/`now`/
+    `pepper`, no `sendSms`/`renderSmsBody`) since confirmation never sends anything.
