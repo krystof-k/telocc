@@ -1,8 +1,8 @@
-import { runScheduledJobs } from '@telocc/core';
 import { createNeonDb } from '@telocc/db/neon';
 import { buildApp } from './app.ts';
 import { buildDeps } from './deps.ts';
 import { loadEnv } from './env.ts';
+import { runScheduledJob } from './jobs/scheduled.ts';
 
 interface WorkersEnv {
   [key: string]: string | undefined;
@@ -27,7 +27,8 @@ export default {
 
   async scheduled(_event: unknown, rawEnv: WorkersEnv, ctx: ExecutionContext): Promise<void> {
     const env = loadEnv(rawEnv);
-    void env; // reserved for the real job wiring (M8)
-    ctx.waitUntil(runScheduledJobs());
+    const db = createNeonDb(env.DATABASE_URL);
+    const deps = buildDeps({ db, env });
+    ctx.waitUntil(runScheduledJob(deps));
   },
 };

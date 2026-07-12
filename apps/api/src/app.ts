@@ -5,9 +5,11 @@ import type { AppEnv } from './lib/context.ts';
 import { requireOrg } from './middleware/org.ts';
 import { securityHeaders } from './middleware/security-headers.ts';
 import { requireSession } from './middleware/session.ts';
+import { assetsRoutes } from './routes/assets.ts';
 import { authRoutes } from './routes/auth.ts';
 import { callsRoutes } from './routes/calls.ts';
 import { devRoutes } from './routes/dev/index.ts';
+import { dsrRoutes } from './routes/dsr.ts';
 import { healthRoute } from './routes/health.ts';
 import { kycRoutes } from './routes/kyc.ts';
 import { meRoutes } from './routes/me.ts';
@@ -39,6 +41,8 @@ export function buildApp(deps: Deps) {
   // Both live outside the `/api/*` session gate.
   app.route('/webhooks', webhooksRoutes(deps));
   app.route('/dev', devRoutes(deps));
+  // Static call-audio assets (refusal tone, beep) — provider-fetched, unauthenticated.
+  app.route('/assets', assetsRoutes(deps));
 
   // Mounted before the `/api/*` gate below so magic-link/session/sign-out endpoints
   // stay public — Hono's routing terminates at this sub-app's handler (it never calls
@@ -62,6 +66,7 @@ export function buildApp(deps: Deps) {
   app.route('/api', numbersRoutes(deps));
   app.route('/api', officeHoursRoutes(deps));
   app.route('/api', callsRoutes(deps));
+  app.route('/api', dsrRoutes(deps));
 
   return app;
 }
